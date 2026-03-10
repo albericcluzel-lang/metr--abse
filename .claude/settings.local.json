@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python build_metré.py)",
+      "Bash(ls /c/Python*/python.exe)",
+      "Read(//c/Users/ABSE/AppData/Local/Programs/**)",
+      "Read(//c/Users/ABSE/**)",
+      "Read(//c/Users/ABSE/AppData/Local/**)",
+      "Bash(node -e \"require\\(''exceljs''\\)\")",
+      "Bash(npm init -y)",
+      "Bash(npm install exceljs)",
+      "Bash(node build_metré.js)"
+    ]
+  }
+}
