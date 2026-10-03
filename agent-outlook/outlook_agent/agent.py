@@ -5,7 +5,6 @@ import json
 import math
 import os
 import re
-import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -133,6 +132,7 @@ class RunReport:
     outcomes: list[Outcome] = field(default_factory=list)
     skipped_seen: int = 0
     skipped_events: int = 0
+    aborted: str | None = None  # raison d'un arrêt avant la fin (clé refusée, panne...)
 
     @property
     def errors(self) -> list[Outcome]:
@@ -140,66 +140,63 @@ class RunReport:
 
 
 class RunLock:
-    """Empêche deux passages simultanés (tâche planifiée et lancement manuel, par exemple)."""
+    """Empêche deux passages simultanés (tâche planifiée et lancement manuel, par exemple).
 
-    STALE_AFTER = 3 * 3600  # un verrou plus vieux vient d'un passage arrêté brutalement
+    Verrou du système d'exploitation : il est libéré automatiquement si le programme s'arrête
+    brutalement, il n'y a donc jamais de verrou abandonné à deviner.
+    """
 
     def __init__(self, home: Path):
         self._path = home / "agent.lock"
-        self._token = uuid.uuid4().hex
+        self._handle = None
 
     def __enter__(self) -> "RunLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(2):
-            try:
-                fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            except FileExistsError:
-                try:
-                    age = time.time() - self._path.stat().st_mtime
-                except FileNotFoundError:
-                    continue  # libéré entre-temps
-                if age < self.STALE_AFTER:
-                    raise FatalError(
-                        "Un autre passage de l'agent est en cours. Réessayez plus tard "
-                        f"(si aucun ne tourne, supprimez {self._path})."
-                    )
-                self._path.unlink(missing_ok=True)
-                continue
-            with os.fdopen(fd, "w") as handle:
-                handle.write(self._token)
-            return self
-        raise FatalError(f"Impossible de prendre le verrou {self._path}.")
+        handle = open(self._path, "a+")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            raise FatalError("Un autre passage de l'agent est en cours. Réessayez plus tard.") from None
+        self._handle = handle
+        return self
 
     def __exit__(self, *exc_info) -> None:
-        # Ne retire que son propre verrou : s'il a été repris (jugé abandonné), il est à un autre.
-        try:
-            if self._path.read_text() == self._token:
-                self._path.unlink()
-        except FileNotFoundError:
-            pass
+        self._handle.close()  # fermer le fichier libère le verrou
 
 
 class StateStore:
-    """Mails déjà traités, et les catégories que l'agent leur a posées.
+    """Mails déjà traités, et ce que l'agent leur a posé (catégories, drapeau).
 
-    Un mail laissé dans la boîte de réception n'est pas ré-analysé. Retenir les catégories posées
-    par l'agent permet de ne jamais retirer une catégorie de l'utilisateur, même de même nom.
+    Un mail laissé dans la boîte de réception n'est pas ré-analysé. Retenir ce que l'agent a posé
+    permet de ne jamais retirer une catégorie ou un drapeau de l'utilisateur.
     """
 
     # Seuls les mails rangés hors de la boîte de réception sont oubliés au-delà de ce nombre :
     # ceux qui y sont restés ne doivent jamais être ré-analysés.
     MAX_MOVED_ENTRIES = 5000
-    # Un mail qui échoue autant de fois de suite est laissé tel quel, pour ne pas le renvoyer
-    # à l'IA indéfiniment.
+    # Un mail qui échoue autant de fois est laissé de côté, pour ne pas le renvoyer à l'IA sans fin.
     MAX_FAILURES = 3
 
     def __init__(self, path: Path):
         self._path = path
         self._entries: dict[str, dict] = {}
+        self.recovered_from: Path | None = None
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, UnicodeDecodeError):
+                # Illisible : mis de côté plutôt qu'écrasé, et on repart d'un état vide.
+                self.recovered_from = path.with_name(f"{path.name}.illisible-{datetime.now():%Y%m%d-%H%M%S}")
+                os.replace(path, self.recovered_from)
                 data = {}
             processed = data.get("processed") if isinstance(data, dict) else None
             if isinstance(processed, dict):
@@ -217,14 +214,22 @@ class StateStore:
         labels = self._entries.get(mail_id, {}).get("labels")
         return list(labels) if isinstance(labels, list) else []
 
-    def mark(self, mail_id: str, labels: list[str], *, done: bool = True, moved: bool = False) -> None:
+    def agent_flagged(self, mail_id: str) -> bool:
+        return bool(self._entries.get(mail_id, {}).get("flagged"))
+
+    def mark(self, mail_id: str, labels: list[str], *, flagged: bool = False,
+             done: bool = True, moved: bool = False) -> None:
         self._entries[mail_id] = {
             "time": datetime.now().isoformat(timespec="seconds"),
-            "labels": labels, "done": done, "moved": moved,
+            "labels": labels, "flagged": flagged, "done": done, "moved": moved,
         }
 
+    def add_agent_label(self, mail_id: str, label: str) -> None:
+        entry = self._entries.setdefault(mail_id, {"labels": []})
+        entry["labels"] = self.agent_labels(mail_id) + [label]
+
     def record_failure(self, mail_id: str) -> bool:
-        """Compte un échec. Renvoie True si le mail est désormais abandonné (laissé tel quel)."""
+        """Compte un échec. Renvoie True si le mail est désormais laissé de côté."""
         entry = self._entries.get(mail_id)
         failures = int((entry or {}).get("failures", 0)) + 1
         give_up = failures >= self.MAX_FAILURES
@@ -249,7 +254,7 @@ class StateStore:
 class ActionLog:
     """Journal de ce qui a été modifié, pour pouvoir annuler un passage."""
 
-    REQUIRED_KEYS = {"run_id", "id", "added_labels", "removed_labels", "flag_set", "moved_to"}
+    REQUIRED_KEYS = {"run_id", "id", "added_labels", "removed_labels", "flag_change", "moved_to"}
 
     def __init__(self, path: Path):
         self._path = path
@@ -264,10 +269,6 @@ class ActionLog:
 
     def mark_item_undone(self, run_id: str, mail_id: str) -> None:
         self.append({"undone_item": run_id, "id": mail_id, "time": datetime.now().isoformat(timespec="seconds")})
-
-    def undone_items(self) -> set[tuple[str, str]]:
-        return {(entry["undone_item"], entry["id"]) for entry in self._lines()
-                if "undone_item" in entry and "id" in entry}
 
     def _lines(self) -> Iterator[dict]:
         """Lignes valides du journal ; une ligne tronquée (arrêt brutal) est ignorée."""
@@ -286,6 +287,10 @@ class ActionLog:
 
     def undone_runs(self) -> set[str]:
         return {entry["undone"] for entry in self._lines() if "undone" in entry}
+
+    def undone_items(self) -> set[tuple[str, str]]:
+        return {(entry["undone_item"], entry["id"]) for entry in self._lines()
+                if "undone_item" in entry and "id" in entry}
 
 
 @dataclass
@@ -310,8 +315,30 @@ class Agent:
             reprocess: bool = False) -> RunReport:
         run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
         report = RunReport(run_id=run_id, apply=apply)
-        folders = self.mailbox.child_folders()
+        try:
+            folders = self.mailbox.child_folders()
+            for raw in self._pending(report, limit, since_days, reprocess):
+                report.outcomes.append(self._process(raw, apply, folders, report.run_id))
+                if apply:
+                    self.state.save()  # après chaque mail : même un arrêt brutal ne perd rien
+        except FatalError as exc:
+            # Erreur qui toucherait tous les mails : on s'arrête, mais le rapport (et donc le
+            # résumé des mails déjà rangés) est conservé.
+            report.aborted = str(exc)
+        finally:
+            if apply:
+                self.state.save()
 
+        # Un échec ne compte contre un mail que si d'autres ont réussi dans ce passage : pendant
+        # une panne générale, un mail sain ne doit pas finir laissé de côté.
+        if apply and any(not outcome.error for outcome in report.outcomes):
+            for outcome in report.errors:
+                if self.state.record_failure(outcome.mail.id):
+                    self._give_up(outcome)
+            self.state.save()
+        return report
+
+    def _pending(self, report: RunReport, limit: int, since_days: int | None, reprocess: bool) -> list[dict]:
         # Liste complète avant toute modification : déplacer des mails pendant la pagination
         # décalerait les pages suivantes. `limit` compte les mails à analyser, pas ceux ignorés,
         # pour que des mails déjà traités restés en boîte de réception ne bloquent pas les plus anciens.
@@ -325,16 +352,7 @@ class Agent:
                 pending.append(raw)
                 if len(pending) >= limit:
                     break
-
-        try:
-            for raw in pending:
-                report.outcomes.append(self._process(raw, apply, folders, report.run_id))
-                if apply:
-                    self.state.save()  # après chaque mail : même un arrêt brutal ne perd rien
-        finally:
-            if apply:
-                self.state.save()
-        return report
+        return pending
 
     def _process(self, raw: dict, apply: bool, folders: dict[str, str], run_id: str) -> Outcome:
         # Une erreur propre à un mail ne doit pas arrêter les autres ; une erreur qui les toucherait
@@ -344,13 +362,13 @@ class Agent:
         except FatalError:
             raise
         except Exception as exc:
-            return self._failed(Outcome(Mail.from_graph(raw, "", 0), None, error=f"lecture : {exc}"), apply)
+            return Outcome(Mail.from_graph(raw, "", 0), None, error=f"lecture : {exc}")
         try:
             decision = decide(self.classify(mail), self.categories, self.settings.min_confidence)
         except FatalError:
             raise
         except Exception as exc:
-            return self._failed(Outcome(mail, None, error=f"classement : {exc}"), apply)
+            return Outcome(mail, None, error=f"classement : {exc}")
 
         outcome = Outcome(mail, decision)
         if apply:
@@ -361,27 +379,44 @@ class Agent:
                 raise
             except Exception as exc:
                 outcome.error = f"application : {exc}"
-                self._failed(outcome, apply)
         return outcome
 
-    def _failed(self, outcome: Outcome, apply: bool) -> Outcome:
-        if apply and self.state.record_failure(outcome.mail.id):
-            outcome.error += f" (abandonné après {StateStore.MAX_FAILURES} échecs : mail laissé tel quel)"
-        return outcome
+    def _give_up(self, outcome: Outcome) -> None:
+        """Mail qui échoue sans cesse : laissé en boîte de réception, marqué « À vérifier »."""
+        mail_id = outcome.mail.id
+        try:
+            categories = self.mailbox.get_message(mail_id).get("categories") or []
+            if REVIEW_LABEL not in categories:
+                self.mailbox.update_message(mail_id, categories=categories + [REVIEW_LABEL])
+                self.state.add_agent_label(mail_id, REVIEW_LABEL)
+            outcome.error += f" (laissé de côté après {StateStore.MAX_FAILURES} échecs, marqué « {REVIEW_LABEL} »)"
+        except Exception:
+            outcome.error += f" (laissé de côté après {StateStore.MAX_FAILURES} échecs)"
 
     def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> None:
         """Pose catégories, drapeau et dossier, et note dans l'état ce qui appartient à l'agent."""
-        # Un re-classement remplace les catégories posées auparavant par l'agent ; celles de
-        # l'utilisateur restent, et une catégorie qu'il avait déjà n'est jamais considérée comme à l'agent.
+        # Un re-classement remplace ce que l'agent avait posé ; ce que l'utilisateur a posé reste,
+        # et une catégorie ou un drapeau qu'il avait déjà ne sont jamais considérés comme à l'agent.
         owned_before = self.state.agent_labels(mail.id)
+        flagged_before = self.state.agent_flagged(mail.id)
         kept = [label for label in mail.categories if label not in owned_before]
         owned = [label for label in decision.labels if label not in kept]
         labels = kept + owned
-        flag_status = "flagged" if decision.flag and mail.flag_status == "notFlagged" else None
-        self.mailbox.update_message(mail.id, categories=labels, flag_status=flag_status)
+        if decision.flag and mail.flag_status == "notFlagged":
+            flag_change = "set"
+        elif not decision.flag and flagged_before and mail.flag_status == "flagged":
+            flag_change = "cleared"
+        else:
+            flag_change = None
+        flagged = flag_change == "set" or (decision.flag and flagged_before)
+
+        self.mailbox.update_message(
+            mail.id, categories=labels,
+            flag_status={"set": "flagged", "cleared": "notFlagged"}.get(flag_change),
+        )
         # Noté tout de suite : si le déplacement échoue, le prochain passage reprend ce mail
-        # en sachant quelles catégories sont à l'agent.
-        self.state.mark(mail.id, owned, done=False)
+        # en sachant ce qui est à l'agent.
+        self.state.mark(mail.id, owned, flagged=flagged, done=False)
 
         entry = {
             "run_id": run_id,
@@ -392,7 +427,8 @@ class Agent:
             "added_labels": [label for label in labels if label not in mail.categories],
             "removed_labels": [label for label in mail.categories if label not in labels],
             "owned_before": owned_before,
-            "flag_set": flag_status is not None,
+            "flagged_before": flagged_before,
+            "flag_change": flag_change,
             "moved_to": None,
         }
         try:
@@ -402,7 +438,7 @@ class Agent:
                 entry["moved_to"] = decision.folder
         finally:
             self.log.append(entry)
-        self.state.mark(mail.id, owned, moved=entry["moved_to"] is not None)
+        self.state.mark(mail.id, owned, flagged=flagged, moved=entry["moved_to"] is not None)
 
     def undo(self, *, apply: bool, run_id: str | None = None) -> list[UndoItem]:
         """Remet les mails d'un passage dans la boîte de réception et retire ce que l'agent a posé.
@@ -438,35 +474,48 @@ class Agent:
         for item in items:
             if item.error or item.restored:
                 continue
-            entry = item.entry
             try:
-                current = self.mailbox.get_message(entry["id"])
-                categories = [c for c in current.get("categories") or [] if c not in entry["added_labels"]]
-                categories += [c for c in entry["removed_labels"] if c not in categories]
-                current_flag = (current.get("flag") or {}).get("flagStatus")
-                flag_status = "notFlagged" if entry["flag_set"] and current_flag == "flagged" else None
-                self.mailbox.update_message(entry["id"], categories=categories, flag_status=flag_status)
-                if entry["moved_to"]:
-                    parent = current.get("parentFolderId")
-                    where = self.mailbox.folder_name(parent) if parent else ""
-                    if where.casefold() == entry["moved_to"].casefold():
-                        self.mailbox.move_message(entry["id"], "inbox")
-                    else:
-                        item.note = f"laissé dans « {where or 'dossier inconnu'} », où il a été déplacé depuis"
-                self.state.mark(entry["id"], list(entry.get("owned_before") or []))
-                self.log.mark_item_undone(run_id, entry["id"])
-                item.restored = True
+                self._restore(item)
+                self.log.mark_item_undone(run_id, item.entry["id"])
             except FatalError:
                 self.state.save()
                 raise
             except Exception as exc:
-                item.error = str(exc)
+                if getattr(exc, "status", None) == 404:  # supprimé définitivement depuis
+                    item.restored, item.note = True, "supprimé définitivement depuis, rien à remettre"
+                    self.log.mark_item_undone(run_id, item.entry["id"])
+                else:
+                    item.error = str(exc)
 
         self.state.save()
         # Un passage annulé en partie reste la cible par défaut, pour pouvoir relancer l'annulation.
         if all(item.restored for item in items):
             self.log.mark_undone(run_id)
         return items
+
+    def _restore(self, item: UndoItem) -> None:
+        entry = item.entry
+        current = self.mailbox.get_message(entry["id"])
+        categories = [c for c in current.get("categories") or [] if c not in entry["added_labels"]]
+        categories += [c for c in entry["removed_labels"] if c not in categories]
+        current_flag = (current.get("flag") or {}).get("flagStatus")
+        flag_status = None
+        if entry["flag_change"] == "set" and current_flag == "flagged":
+            flag_status = "notFlagged"
+        elif entry["flag_change"] == "cleared" and current_flag == "notFlagged":
+            flag_status = "flagged"
+        self.mailbox.update_message(entry["id"], categories=categories, flag_status=flag_status)
+
+        if entry["moved_to"]:
+            parent = current.get("parentFolderId")
+            where = self.mailbox.folder_name(parent) if parent else ""
+            if where.casefold() == entry["moved_to"].casefold():
+                self.mailbox.move_message(entry["id"], "inbox")
+            else:
+                item.note = f"laissé dans « {where or 'dossier inconnu'} », où il a été déplacé depuis"
+        self.state.mark(entry["id"], list(entry.get("owned_before") or []),
+                        flagged=bool(entry.get("flagged_before")))
+        item.restored = True
 
 
 def setup_mailbox(mailbox: Mailbox, categories: tuple[Category, ...]) -> list[str]:
@@ -534,6 +583,8 @@ def render_digest(report: RunReport) -> str:
         f"{len(left)} laissés en boîte de réception, {len(report.errors)} en erreur. "
         f"Ignorés : {report.skipped_seen} déjà traités, {report.skipped_events} invitations.",
     ]
+    if report.aborted:
+        lines.extend(["", f"**Passage interrompu avant la fin** : {report.aborted}"])
 
     def section(title: str, selected: list[Outcome]) -> None:
         if not selected:

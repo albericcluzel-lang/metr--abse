@@ -86,13 +86,15 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         settings = dataclasses.replace(settings, min_confidence=args.min_confidence)
     client = _openai_client()
-    agent = Agent(
-        _mailbox(settings),
-        lambda mail: classify(client, settings.model, mail, CATEGORIES, settings.user_context),
-        settings,
-        CATEGORIES,
-    )
+    # Verrou pris avant de lire l'état : un passage qui se termine ne peut pas l'écrire entre-temps.
     with RunLock(settings.home):
+        agent = Agent(
+            _mailbox(settings),
+            lambda mail: classify(client, settings.model, mail, CATEGORIES, settings.user_context),
+            settings,
+            CATEGORIES,
+        )
+        warn_if_state_recovered(agent)
         report = agent.run(apply=args.apply, limit=args.limit, since_days=args.since_days,
                            reprocess=args.reprocess)
 
@@ -108,12 +110,22 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour appliquer le tri.")
     if args.apply and report.outcomes:
         print(f"Passage {report.run_id} (pour l'annuler : python -m outlook_agent undo --run-id {report.run_id})")
-    return 1 if report.errors else 0
+    if report.aborted:
+        print(f"Erreur : passage interrompu avant la fin : {report.aborted}", file=sys.stderr)
+    return 1 if report.errors or report.aborted else 0
+
+
+def warn_if_state_recovered(agent: Agent) -> None:
+    if agent.state.recovered_from:
+        print(f"Attention : l'état de l'agent était illisible, il a été mis de côté dans "
+              f"{agent.state.recovered_from}. Des mails restés en boîte de réception peuvent être "
+              "ré-analysés.", file=sys.stderr)
 
 
 def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
-    agent = Agent(_mailbox(settings), lambda mail: None, settings, CATEGORIES)
     with RunLock(settings.home):
+        agent = Agent(_mailbox(settings), lambda mail: None, settings, CATEGORIES)
+        warn_if_state_recovered(agent)
         items = agent.undo(apply=args.apply, run_id=args.run_id)
     if not items:
         print("Rien à annuler." if not args.run_id else f"Rien à annuler : passage {args.run_id} inconnu ou déjà annulé.")

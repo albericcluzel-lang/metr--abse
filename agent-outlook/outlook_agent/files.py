@@ -16,4 +16,6 @@ def write_atomic(path: Path, text: str, *, private: bool = False) -> None:
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600 if private else 0o666)
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
         handle.write(text)
+        handle.flush()
+        os.fsync(handle.fileno())  # sur le disque avant le renommage, même en cas de coupure
     os.replace(temporary, path)

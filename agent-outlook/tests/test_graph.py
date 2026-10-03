@@ -149,20 +149,33 @@ def test_retries_server_and_network_errors(failure):
     assert len(session.calls) == 2
 
 
-def test_gives_up_after_too_many_attempts_without_a_useless_last_wait(sleeps):
-    client, session = make_client([FakeResponse(503, payload={})] * graph.MAX_ATTEMPTS)
-    with pytest.raises(FatalError, match="injoignable"):  # panne : inutile d'insister mail par mail
+@pytest.mark.parametrize("failure, fatal", [
+    (requests.ConnectionError("réseau coupé"), True),   # panne générale : inutile d'insister
+    (FakeResponse(429, payload={}), True),              # boîte saturée : idem
+    (FakeResponse(503, payload={}), False),             # peut venir d'un seul mail abîmé
+])
+def test_gives_up_after_too_many_attempts_without_a_useless_last_wait(sleeps, failure, fatal):
+    client, session = make_client([failure] * graph.MAX_ATTEMPTS)
+    with pytest.raises(GraphError, match="indisponible") as error:
         client.create_folder("Test")
+    assert isinstance(error.value, FatalError) == fatal
     assert len(session.calls) == graph.MAX_ATTEMPTS
     assert len(sleeps) == graph.MAX_ATTEMPTS - 1
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_missing_permission_stops_the_run(status):
-    client, _ = make_client([FakeResponse(status, payload={"error": "Forbidden"})])
-    with pytest.raises(FatalError, match=str(status)) as error:
+def test_refused_connection_stops_the_run():
+    client, _ = make_client([FakeResponse(401, payload={"error": "InvalidAuthenticationToken"})])
+    with pytest.raises(FatalError, match="401") as error:
         client.master_categories()
-    assert isinstance(error.value, GraphError) and error.value.status == status
+    assert isinstance(error.value, GraphError) and error.value.status == 401
+
+
+def test_forbidden_on_one_mail_is_not_fatal():
+    # Ex. : mail protégé. Un seul mail ne doit pas bloquer tous les passages.
+    client, _ = make_client([FakeResponse(403, payload={"error": "ErrorAccessDenied"})])
+    with pytest.raises(GraphError) as error:
+        client.get_body("protégé")
+    assert not isinstance(error.value, FatalError) and error.value.status == 403
 
 
 def test_error_specific_to_one_mail_is_not_fatal():

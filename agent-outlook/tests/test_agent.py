@@ -1,6 +1,4 @@
 import json
-import os
-import time
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -56,6 +54,12 @@ class FakeMailbox:
         }
         self.location = {m["id"]: "inbox" for m in messages}
         self.folder_names = {"inbox": "Boîte de réception"}
+
+    def add(self, message):
+        self.messages.append(message)
+        self.current[message["id"]] = {"categories": list(message.get("categories", [])),
+                                       "flag": dict(message.get("flag", {}))}
+        self.location[message["id"]] = "inbox"
 
     def iter_inbox_messages(self, since_days=None):
         for message in self.messages:
@@ -232,6 +236,27 @@ def test_user_label_with_an_agent_name_is_never_removed(tmp_path):
     assert mailbox.current["1"]["categories"] == ["Urgent", "Chantier"]
 
 
+def test_reclassifying_as_not_urgent_removes_the_agent_flag_and_undo_puts_it_back(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict(urgent=True, confidence=0.3), verdict()])
+    agent.run(apply=True, limit=10)  # urgent mais incertain : reste en boîte, avec drapeau
+    assert mailbox.current["1"]["flag"] == {"flagStatus": "flagged"}
+
+    mailbox.messages[0].update(categories=list(mailbox.current["1"]["categories"]),
+                               flag=dict(mailbox.current["1"]["flag"]))
+    agent.run(apply=True, limit=10, reprocess=True)  # finalement pas urgent
+    assert mailbox.current["1"]["flag"] == {"flagStatus": "notFlagged"}
+
+    agent.undo(apply=True)
+    assert mailbox.current["1"]["flag"] == {"flagStatus": "flagged"}
+
+
+def test_reclassifying_keeps_a_flag_set_by_the_user(tmp_path):
+    message = raw_mail("1", flag={"flagStatus": "flagged"})  # drapeau de l'utilisateur
+    agent, mailbox = make_agent(tmp_path, [message], [verdict()])
+    agent.run(apply=True, limit=10)
+    assert mailbox.writes[0][3] is None
+
+
 def test_reclassifying_replaces_agent_labels_but_keeps_user_labels(tmp_path):
     agent, mailbox = make_agent(
         tmp_path, [raw_mail("1", categories=["Perso"])], [verdict(confidence=0.2), verdict("fournisseurs")]
@@ -334,8 +359,10 @@ def test_error_affecting_every_mail_stops_the_run(tmp_path, where):
             return original(message_id)
 
         mailbox.get_body = expired_after_first
-    with pytest.raises(FatalError):
-        agent.run(apply=True, limit=10)
+    report = agent.run(apply=True, limit=10)
+    # Arrêt net, mais le rapport des mails déjà rangés est conservé (résumé, identifiant d'annulation).
+    assert report.aborted and [o.mail.id for o in report.outcomes] == ["1"]
+    assert "Passage interrompu" in render_digest(report)
     reloaded = StateStore(tmp_path / "state.json")
     assert reloaded.seen("1") and not reloaded.seen("2") and not reloaded.seen("3")
 
@@ -356,13 +383,30 @@ def test_failed_move_keeps_track_of_agent_labels_for_the_retry(tmp_path):
     assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
 
 
-def test_a_mail_that_keeps_failing_is_abandoned_after_three_tries(tmp_path):
-    agent, _ = make_agent(tmp_path, [raw_mail("1")], [RuntimeError("refusé par le filtre")] * 4)
+def test_a_mail_that_keeps_failing_is_set_aside_after_three_tries(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("bad")], [])
+
+    def classify(mail):
+        if mail.id == "bad":
+            raise RuntimeError("refusé par le filtre")
+        return verdict()
+
+    agent.classify = classify
     agent.run(apply=False, limit=10)  # une simulation ne compte pas
-    assert "abandonné" not in agent.run(apply=True, limit=10).errors[0].error
-    assert "abandonné" not in agent.run(apply=True, limit=10).errors[0].error
-    assert "abandonné" in agent.run(apply=True, limit=10).errors[0].error
-    assert agent.run(apply=True, limit=10).skipped_seen == 1
+    for attempt in range(3):
+        mailbox.add(raw_mail(f"nouveau-{attempt}"))  # d'autres mails réussissent dans chaque passage
+        report = agent.run(apply=True, limit=10)
+        bad = next(o for o in report.outcomes if o.mail.id == "bad")
+        assert ("laissé de côté" in bad.error) == (attempt == 2)
+    assert mailbox.current["bad"]["categories"] == ["À vérifier"]
+    assert agent.run(apply=True, limit=10).skipped_seen == 4
+
+
+def test_failures_during_a_general_outage_do_not_count(tmp_path):
+    agent, _ = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [RuntimeError("OpenAI en panne")] * 10)
+    for _ in range(5):  # rien ne réussit : ce sont les services qui sont en panne, pas les mails
+        report = agent.run(apply=True, limit=10)
+    assert len(report.outcomes) == 2 and not any("laissé de côté" in o.error for o in report.outcomes)
 
 
 def test_state_is_written_after_each_mail(tmp_path):
@@ -395,24 +439,26 @@ def test_run_ids_are_unique_even_within_the_same_second(tmp_path):
     assert agent.run(apply=False, limit=1).run_id != agent.run(apply=False, limit=1).run_id
 
 
-def test_run_lock_prevents_two_runs_and_recovers_from_a_stale_lock(tmp_path):
+def test_run_lock_prevents_two_runs_at_once(tmp_path):
     with RunLock(tmp_path):
         with pytest.raises(FatalError, match="en cours"):
             with RunLock(tmp_path):
                 pass
-    assert not (tmp_path / "agent.lock").exists()
-
-    (tmp_path / "agent.lock").write_text("123")
-    old = time.time() - RunLock.STALE_AFTER - 10
-    os.utime(tmp_path / "agent.lock", (old, old))
-    with RunLock(tmp_path):  # verrou abandonné par un passage arrêté brutalement
+    with RunLock(tmp_path):  # libéré à la sortie
         pass
 
 
-def test_run_lock_does_not_remove_a_lock_taken_over_by_another_run(tmp_path):
+def test_run_lock_file_left_by_a_crashed_run_does_not_block(tmp_path):
+    (tmp_path / "agent.lock").write_text("reste d'un passage arrêté brutalement")
     with RunLock(tmp_path):
-        (tmp_path / "agent.lock").write_text("verrou d'un autre passage")
-    assert (tmp_path / "agent.lock").read_text() == "verrou d'un autre passage"
+        pass
+
+
+def test_corrupted_state_is_set_aside_not_overwritten(tmp_path):
+    (tmp_path / "state.json").write_text('{"processed": {"1": {"labels": [', encoding="utf-8")
+    state = StateStore(tmp_path / "state.json")
+    assert state.recovered_from and state.recovered_from.read_text(encoding="utf-8").startswith('{"processed"')
+    assert not state.seen("1")
 
 
 def test_state_from_an_older_format_is_still_read(tmp_path):
@@ -519,6 +565,25 @@ def test_retrying_an_interrupted_undo_does_not_replay_restored_mails(tmp_path):
     assert second["2"].restored
     assert all(write[1] == "2" for write in mailbox.writes)
     assert mailbox.current["1"]["categories"] == ["Chantier"]
+
+
+def test_undo_of_a_permanently_deleted_mail_does_not_block_the_run(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [verdict(), verdict()])
+    agent.run(apply=True, limit=10)
+    original = mailbox.get_message
+
+    def get_message(message_id):
+        if message_id == "1":
+            error = RuntimeError("404 ErrorItemNotFound")
+            error.status = 404
+            raise error
+        return original(message_id)
+
+    mailbox.get_message = get_message
+    items = {item.entry["id"]: item for item in agent.undo(apply=True)}
+    assert items["1"].restored and "supprimé" in items["1"].note
+    assert items["2"].restored
+    assert agent.undo(apply=True) == []  # le passage est bien considéré comme annulé
 
 
 def test_partially_failed_undo_stays_the_default_target(tmp_path):

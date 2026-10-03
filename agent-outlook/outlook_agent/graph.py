@@ -31,10 +31,11 @@ class GraphError(RuntimeError):
 
 
 class GraphUnavailable(GraphError, FatalError):
-    """Microsoft Graph injoignable ou permission refusée : toucherait tous les mails."""
+    """Microsoft Graph injoignable, saturé ou connexion refusée : toucherait tous les mails.
 
-
-FATAL_STATUS = (401, 403)
+    Une erreur qui peut ne concerner qu'un mail (403 sur un mail protégé, 500 sur un mail abîmé)
+    reste une GraphError ordinaire, pour qu'un seul mail ne bloque pas tous les passages.
+    """
 
 
 def _retry_delay(response: requests.Response, attempt: int) -> float:
@@ -50,7 +51,7 @@ class GraphClient:
         self._session = requests.Session()
 
     def _request(self, method: str, url: str, *, params=None, json=None, prefer: str = PREFER_IDS) -> dict:
-        delay, last_error = 0.0, ""
+        delay, last_error, last_status = 0.0, "", None
         for attempt in range(MAX_ATTEMPTS):
             if attempt:
                 time.sleep(delay)
@@ -61,18 +62,23 @@ class GraphClient:
                     method, url, params=params, json=json, headers=headers, timeout=60
                 )
             except (requests.ConnectionError, requests.Timeout) as exc:
-                delay, last_error = float(2 ** attempt), f"réseau : {exc}"
+                delay, last_error, last_status = float(2 ** attempt), f"réseau : {exc}", None
                 continue
             if response.status_code in RETRY_STATUS:
-                delay, last_error = _retry_delay(response, attempt), f"statut {response.status_code}"
+                delay, last_status = _retry_delay(response, attempt), response.status_code
+                last_error = f"statut {response.status_code}"
                 continue
             if not response.ok:
-                error = GraphUnavailable if response.status_code in FATAL_STATUS else GraphError
+                # 401 : la connexion elle-même est refusée, rien ne passera.
+                error = GraphUnavailable if response.status_code == 401 else GraphError
                 raise error(
                     f"{method} {url} -> {response.status_code} {response.text[:300]}", response.status_code
                 )
             return response.json() if response.content else {}
-        raise GraphUnavailable(f"Microsoft Graph injoignable : {method} {url} ({last_error})")
+        # Réseau coupé ou boîte saturée (429) : panne générale. Un 5xx persistant peut venir d'un
+        # seul mail abîmé : erreur ordinaire.
+        error = GraphUnavailable if last_status in (None, 429) else GraphError
+        raise error(f"Microsoft Graph indisponible : {method} {url} ({last_error})", last_status)
 
     def _pages(self, url: str, params: dict | None = None) -> Iterator[dict]:
         """Éléments d'une liste Graph, page par page, téléchargés au fur et à mesure."""
