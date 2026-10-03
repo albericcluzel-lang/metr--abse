@@ -8,8 +8,7 @@ from outlook_agent.classifier import ClassifierUnavailable, classify
 from outlook_agent.config import CATEGORIES, Category
 
 MAIL = Mail(id="1", subject="Objet", sender="Jean", address="jean@exemple.fr", received="",
-            body="Corps", has_attachments=False, importance="normal", categories=[],
-            flag_status="notFlagged")
+            body="Corps", has_attachments=False, importance="normal")
 
 
 def sdk_error(cls, **attributes):

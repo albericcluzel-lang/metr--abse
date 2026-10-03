@@ -17,11 +17,23 @@ from .config import (
 )
 from .files import write_atomic
 
+# Autant d'erreurs de suite, sur des mails qui n'avaient encore jamais échoué, font arrêter le
+# passage : un service est sans doute en panne, inutile d'attendre des heures que chaque mail
+# épuise ses nouvelles tentatives.
+MAX_CONSECUTIVE_ERRORS = 5
+# Marge de relecture avant le point de reprise (mail daté un peu avant son arrivée dans la boîte).
+WATERMARK_MARGIN = timedelta(days=1)
+# Relecture complète de la boîte au moins aussi souvent : rattrape un mail revenu en boîte de
+# réception avec une date ancienne (sorti des indésirables, ramené d'un autre dossier) et les mails
+# restés en suspens hors de la fenêtre lue.
+FULL_SCAN_EVERY = timedelta(hours=24)
+
 
 class Mailbox(Protocol):
     """Ce dont l'agent a besoin de la boîte mail (implémenté par GraphClient)."""
 
     def iter_inbox_messages(self, since: datetime | None = None) -> Iterator[dict]: ...
+    def inbox_folder(self) -> dict: ...
     def get_body(self, message_id: str) -> str: ...
     def get_message(self, message_id: str) -> dict: ...
     def folder_name(self, folder_id: str) -> str: ...
@@ -34,16 +46,28 @@ class Mailbox(Protocol):
     def create_master_category(self, name: str, color: str) -> None: ...
 
 
-# Autant d'erreurs de suite font arrêter le passage : un service est sans doute en panne, inutile
-# d'attendre des heures que chaque mail épuise ses nouvelles tentatives.
-MAX_CONSECUTIVE_ERRORS = 5
-# Marge de relecture avant le point de reprise (décalage d'horloge, mail daté avant son arrivée).
-WATERMARK_MARGIN = timedelta(days=1)
+class MovedByUser(Exception):
+    """Le mail n'est plus dans la boîte de réception au moment de le ranger."""
 
 
 def is_meeting_message(raw: dict) -> bool:
     """Invitations et réponses de réunion : on les laisse là où Outlook les attend."""
     return "eventMessage" in (raw.get("@odata.type") or "")
+
+
+def _from_iso(value) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def received_at(raw: dict) -> datetime | None:
+    """Date de réception donnée par le serveur Microsoft (indépendante de l'horloge du PC)."""
+    moment = _from_iso(raw.get("receivedDateTime")) if raw.get("receivedDateTime") else None
+    if moment and moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment
 
 
 @dataclass(frozen=True)
@@ -56,8 +80,6 @@ class Mail:
     body: str
     has_attachments: bool
     importance: str
-    categories: list[str]
-    flag_status: str
 
     @classmethod
     def from_graph(cls, raw: dict, body: str, body_chars: int) -> "Mail":
@@ -71,8 +93,6 @@ class Mail:
             body=re.sub(r"\s+", " ", body).strip()[:body_chars],
             has_attachments=bool(raw.get("hasAttachments")),
             importance=raw.get("importance") or "normal",
-            categories=list(raw.get("categories") or []),
-            flag_status=(raw.get("flag") or {}).get("flagStatus") or "notFlagged",
         )
 
 
@@ -130,6 +150,7 @@ class Outcome:
     decision: Decision | None
     applied: bool = False
     error: str | None = None
+    note: str = ""  # traitement abandonné sans erreur (ex. mail déplacé par l'utilisateur entre-temps)
 
 
 @dataclass
@@ -140,6 +161,7 @@ class RunReport:
     skipped_seen: int = 0
     skipped_events: int = 0
     aborted: str | None = None  # raison d'un arrêt avant la fin (clé refusée, panne...)
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def errors(self) -> list[Outcome]:
@@ -181,7 +203,7 @@ class RunLock:
 
 
 class StateStore:
-    """Mails déjà traités, et ce que l'agent leur a posé (catégories, drapeau).
+    """Mails déjà traités, ce que l'agent leur a posé (catégories, drapeau) et où reprendre la lecture.
 
     Un mail laissé dans la boîte de réception n'est pas ré-analysé. Retenir ce que l'agent a posé
     permet de ne jamais retirer une catégorie ou un drapeau de l'utilisateur.
@@ -190,43 +212,53 @@ class StateStore:
     # Seuls les mails rangés hors de la boîte de réception sont oubliés au-delà de ce nombre :
     # ceux qui y sont restés ne doivent jamais être ré-analysés.
     MAX_MOVED_ENTRIES = 5000
-    # Un mail qui échoue au moins autant de fois, sur au moins cette durée, est laissé de côté :
-    # assez pour ne pas abandonner un mail sain pendant une panne ou une saturation passagère,
-    # sans renvoyer indéfiniment à l'IA un mail qui échoue à chaque fois.
+    # Un mail qui échoue au moins MAX_FAILURES fois (au plus une fois comptée par FAILURE_SPACING),
+    # sur au moins GIVE_UP_AFTER, est laissé de côté : une panne ou une saturation passagère ne
+    # suffit pas, mais un mail qui échoue à chaque fois n'est pas renvoyé à l'IA indéfiniment.
     MAX_FAILURES = 3
+    FAILURE_SPACING = timedelta(hours=1)
     GIVE_UP_AFTER = timedelta(hours=24)
 
     def __init__(self, path: Path):
         self._path = path
         self._entries: dict[str, dict] = {}
         self._watermark: str | None = None
+        self._last_full_scan: str | None = None
         self.recovered_from: Path | None = None
-        if path.exists():
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                # Illisible : mis de côté plutôt qu'écrasé, et on repart d'un état vide.
-                self.recovered_from = path.with_name(f"{path.name}.illisible-{datetime.now():%Y%m%d-%H%M%S}")
-                os.replace(path, self.recovered_from)
-                data = {}
-            processed = data.get("processed") if isinstance(data, dict) else None
-            if isinstance(processed, dict):
-                self._entries = {
-                    mail_id: entry if isinstance(entry, dict) else {"time": str(entry), "labels": []}
-                    for mail_id, entry in processed.items()
-                }
-            watermark = data.get("watermark") if isinstance(data, dict) else None
-            self._watermark = watermark if isinstance(watermark, str) else None
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # Illisible : mis de côté plutôt qu'écrasé, et on repart d'un état vide.
+            self.recovered_from = path.with_name(f"{path.name}.illisible-{datetime.now():%Y%m%d-%H%M%S}")
+            os.replace(path, self.recovered_from)
+            return
+        if not isinstance(data, dict):
+            return
+        processed = data.get("processed")
+        if isinstance(processed, dict):
+            self._entries = {
+                mail_id: entry if isinstance(entry, dict) else {"time": str(entry), "labels": []}
+                for mail_id, entry in processed.items()
+            }
+        self._watermark = data.get("watermark") if isinstance(data.get("watermark"), str) else None
+        self._last_full_scan = data.get("last_full_scan") if isinstance(data.get("last_full_scan"), str) else None
 
     def watermark(self) -> datetime | None:
-        """Début du dernier passage qui a traité, sans erreur, tout ce qui était en attente."""
-        try:
-            return datetime.fromisoformat(self._watermark) if self._watermark else None
-        except ValueError:
-            return None
+        """Date de réception (serveur) jusqu'à laquelle tout a été traité sans erreur."""
+        return _from_iso(self._watermark) if self._watermark else None
 
     def set_watermark(self, moment: datetime) -> None:
-        self._watermark = moment.isoformat(timespec="seconds")
+        current = self.watermark()
+        if current is None or moment > current:
+            self._watermark = moment.isoformat(timespec="seconds")
+
+    def last_full_scan(self) -> datetime | None:
+        return _from_iso(self._last_full_scan) if self._last_full_scan else None
+
+    def set_last_full_scan(self, moment: datetime) -> None:
+        self._last_full_scan = moment.isoformat(timespec="seconds")
 
     def seen(self, mail_id: str) -> bool:
         """Traité jusqu'au bout. Un traitement interrompu sera repris au prochain passage."""
@@ -240,6 +272,9 @@ class StateStore:
     def agent_flagged(self, mail_id: str) -> bool:
         return bool(self._entries.get(mail_id, {}).get("flagged"))
 
+    def failure_count(self, mail_id: str) -> int:
+        return int(self._entries.get(mail_id, {}).get("failures", 0))
+
     def mark(self, mail_id: str, labels: list[str], *, flagged: bool = False,
              done: bool = True, moved: bool = False) -> None:
         previous = self._entries.get(mail_id) or {}
@@ -248,7 +283,8 @@ class StateStore:
             "labels": labels, "flagged": flagged, "done": done, "moved": moved,
         }
         if not done:  # traitement pas encore abouti : le compte des échecs continue
-            entry.update({key: previous[key] for key in ("failures", "first_failure") if key in previous})
+            entry.update({key: previous[key] for key in ("failures", "first_failure", "last_failure")
+                          if key in previous})
         self._entries[mail_id] = entry
 
     def add_agent_label(self, mail_id: str, label: str) -> None:
@@ -259,17 +295,18 @@ class StateStore:
         """Compte un échec. Renvoie True si le mail est désormais laissé de côté."""
         now = now or datetime.now()
         entry = self._entries.get(mail_id) or {"labels": [], "moved": False}
-        failures = int(entry.get("failures", 0)) + 1
-        try:
-            first = datetime.fromisoformat(entry["first_failure"])
-        except (KeyError, TypeError, ValueError):
-            first = now
+        failures = int(entry.get("failures", 0))
+        first = _from_iso(entry.get("first_failure")) or now
+        last = _from_iso(entry.get("last_failure"))
+        if last is None or now - last >= self.FAILURE_SPACING:
+            failures, last = failures + 1, now
         give_up = failures >= self.MAX_FAILURES and now - first >= self.GIVE_UP_AFTER
         self._entries[mail_id] = {
             **entry,
             "time": now.isoformat(timespec="seconds"),
             "failures": failures,
             "first_failure": first.isoformat(timespec="seconds"),
+            "last_failure": last.isoformat(timespec="seconds"),
             "done": give_up or self.seen(mail_id),
         }
         return give_up
@@ -281,7 +318,7 @@ class StateStore:
         )
         forgotten = {mail_id for mail_id, _ in moved[:-self.MAX_MOVED_ENTRIES]}
         kept = {mail_id: entry for mail_id, entry in self._entries.items() if mail_id not in forgotten}
-        data = {"processed": kept, "watermark": self._watermark}
+        data = {"processed": kept, "watermark": self._watermark, "last_full_scan": self._last_full_scan}
         write_atomic(self._path, json.dumps(data, ensure_ascii=False))
 
 
@@ -350,17 +387,23 @@ class Agent:
         started = datetime.now(timezone.utc)
         run_id = f"{started.astimezone():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
         report = RunReport(run_id=run_id, apply=apply)
-        exhausted = False
+        since, exhausted, newest = None, False, None
         try:
             folders = self.mailbox.child_folders()
-            pending, exhausted = self._pending(report, limit, self._since(since_days, reprocess), reprocess)
+            inbox = self.mailbox.inbox_folder() if apply else {}
+            since = self._since(since_days, reprocess)
+            pending, exhausted, newest = self._pending(report, limit, since, reprocess)
             consecutive_errors = 0
             for raw in pending:
-                outcome = self._process(raw, apply, folders, report.run_id)
+                already_failing = self.state.failure_count(raw["id"]) > 0
+                outcome = self._process(raw, apply, folders, inbox, report.run_id)
                 report.outcomes.append(outcome)
                 if apply:
-                    self.state.save()  # après chaque mail : même un arrêt brutal ne perd rien
-                consecutive_errors = consecutive_errors + 1 if outcome.error else 0
+                    self._save_state(report)  # après chaque mail : même un arrêt brutal ne perd rien
+                if not outcome.error:
+                    consecutive_errors = 0
+                elif not already_failing:  # un mail qui échouait déjà ne signale pas une panne
+                    consecutive_errors += 1
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
                     report.aborted = (f"{consecutive_errors} erreurs de suite, service probablement "
                                       f"indisponible : {outcome.error}")
@@ -371,7 +414,7 @@ class Agent:
             report.aborted = str(exc)
         finally:
             if apply:
-                self.state.save()
+                self._save_state(report)
 
         if apply:
             for outcome in report.errors:
@@ -380,26 +423,43 @@ class Agent:
             # Le point de reprise n'avance que si tout ce qui attendait a été traité sans erreur :
             # sinon les mails restants (ou à reprendre) sortiraient de la fenêtre lue.
             if exhausted and not report.errors and not report.aborted and since_days is None and not reprocess:
-                self.state.set_watermark(started)
-            self.state.save()
+                if newest:
+                    self.state.set_watermark(newest)
+                if since is None:
+                    self.state.set_last_full_scan(started)
+            self._save_state(report)
         return report
 
+    def _save_state(self, report: RunReport) -> None:
+        try:
+            self.state.save()
+        except OSError as exc:  # fichier bloqué (antivirus, indexation...) : on continue
+            if not report.warnings:
+                report.warnings.append(f"État non enregistré ({exc}) : des mails pourront être ré-analysés.")
+
     def _since(self, since_days: int | None, reprocess: bool) -> datetime | None:
-        """Date à partir de laquelle lire la boîte : choix explicite, sinon point de reprise."""
+        """Date de réception à partir de laquelle lire : choix explicite, sinon point de reprise."""
         if since_days is not None:
             return datetime.now(timezone.utc) - timedelta(days=since_days)
-        watermark = None if reprocess else self.state.watermark()
-        # Marge d'un jour : décalage d'horloge, mail daté avant son arrivée dans la boîte...
-        return watermark - WATERMARK_MARGIN if watermark else None
+        watermark, last_full = self.state.watermark(), self.state.last_full_scan()
+        if reprocess or watermark is None or last_full is None:
+            return None
+        if datetime.now(timezone.utc) - last_full >= FULL_SCAN_EVERY:
+            return None
+        return watermark - WATERMARK_MARGIN
 
     def _pending(self, report: RunReport, limit: int, since: datetime | None,
-                 reprocess: bool) -> tuple[list[dict], bool]:
-        """Mails à analyser, et si la liste a été parcourue jusqu'au bout."""
+                 reprocess: bool) -> tuple[list[dict], bool, datetime | None]:
+        """Mails à analyser, si la liste a été lue jusqu'au bout, et la réception la plus récente."""
         # Liste complète avant toute modification : déplacer des mails pendant la pagination
         # décalerait les pages suivantes. `limit` compte les mails à analyser, pas ceux ignorés,
         # pour que des mails déjà traités restés en boîte de réception ne bloquent pas les plus anciens.
-        pending = []
+        pending: list[dict] = []
+        newest = None
         for raw in self.mailbox.iter_inbox_messages(since):
+            moment = received_at(raw)
+            if moment and (newest is None or moment > newest):
+                newest = moment
             if is_meeting_message(raw):
                 report.skipped_events += 1
             elif not reprocess and self.state.seen(raw["id"]):
@@ -407,10 +467,10 @@ class Agent:
             else:
                 pending.append(raw)
                 if len(pending) >= limit:
-                    return pending, False
-        return pending, True
+                    return pending, False, newest
+        return pending, True, newest
 
-    def _process(self, raw: dict, apply: bool, folders: dict[str, str], run_id: str) -> Outcome:
+    def _process(self, raw: dict, apply: bool, folders: dict[str, str], inbox: dict, run_id: str) -> Outcome:
         # Une erreur propre à un mail ne doit pas arrêter les autres ; une erreur qui les toucherait
         # tous (FatalError : clé refusée, connexion expirée...) arrête le passage.
         try:
@@ -429,13 +489,41 @@ class Agent:
         outcome = Outcome(mail, decision)
         if apply:
             try:
-                self._apply(mail, decision, folders, run_id)
+                self._apply(mail, decision, folders, inbox, run_id)
                 outcome.applied = True
+            except MovedByUser:
+                outcome.note = "déplacé ou supprimé pendant le passage : laissé tel quel"
+                self.state.mark(mail.id, self.state.agent_labels(mail.id),
+                                flagged=self.state.agent_flagged(mail.id))
             except FatalError:
                 raise
             except Exception as exc:
                 outcome.error = f"application : {exc}"
         return outcome
+
+    def _still_in_inbox(self, current: dict, inbox: dict) -> bool:
+        parent = current.get("parentFolderId")
+        if not parent or parent == inbox.get("id"):
+            return True
+        # Un même dossier peut avoir deux écritures d'identifiant : on compare aussi son nom.
+        return self.mailbox.folder_name(parent) == inbox.get("displayName")
+
+    @staticmethod
+    def _log_entry(run_id: str, mail: Mail, *, added: list[str], removed: list[str],
+                   owned_before: list[str], flagged_before: bool, flag_change: str | None = None) -> dict:
+        return {
+            "run_id": run_id,
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "id": mail.id,
+            "subject": mail.subject[:100],
+            "sender": mail.address,
+            "added_labels": added,
+            "removed_labels": removed,
+            "owned_before": owned_before,
+            "flagged_before": flagged_before,
+            "flag_change": flag_change,
+            "moved_to": None,
+        }
 
     def _give_up(self, outcome: Outcome, run_id: str) -> None:
         """Mail qui échoue sans cesse : laissé en boîte de réception, marqué « À vérifier »."""
@@ -447,22 +535,21 @@ class Agent:
                 self.mailbox.update_message(mail.id, categories=categories + [REVIEW_LABEL])
                 self.state.add_agent_label(mail.id, REVIEW_LABEL)
                 # Journalisé comme le reste, pour qu'une annulation retire aussi cette catégorie.
-                self.log.append({
-                    "run_id": run_id, "time": datetime.now().isoformat(timespec="seconds"),
-                    "id": mail.id, "subject": mail.subject[:100], "sender": mail.address,
-                    "added_labels": [REVIEW_LABEL], "removed_labels": [],
-                    "owned_before": owned_before, "flagged_before": self.state.agent_flagged(mail.id),
-                    "flag_change": None, "moved_to": None,
-                })
+                self.log.append(self._log_entry(
+                    run_id, mail, added=[REVIEW_LABEL], removed=[], owned_before=owned_before,
+                    flagged_before=self.state.agent_flagged(mail.id),
+                ))
             outcome.error += f" (laissé de côté après {StateStore.MAX_FAILURES} échecs, marqué « {REVIEW_LABEL} »)"
         except Exception:
             outcome.error += f" (laissé de côté après {StateStore.MAX_FAILURES} échecs)"
 
-    def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> None:
+    def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], inbox: dict, run_id: str) -> None:
         """Pose catégories, drapeau et dossier, et note dans l'état ce qui appartient à l'agent."""
-        # Relu juste avant d'écrire : la liste a pu être lue plusieurs minutes plus tôt, et une
-        # catégorie ajoutée entre-temps par l'utilisateur ne doit pas être effacée.
+        # Relu juste avant d'écrire : la liste a pu être lue plusieurs minutes plus tôt. Un mail
+        # déplacé ou supprimé entre-temps n'est pas touché, et une catégorie ajoutée n'est pas effacée.
         current = self.mailbox.get_message(mail.id)
+        if not self._still_in_inbox(current, inbox):
+            raise MovedByUser
         categories = list(current.get("categories") or [])
         flag_now = (current.get("flag") or {}).get("flagStatus") or "notFlagged"
         # Un re-classement remplace ce que l'agent avait posé ; ce que l'utilisateur a posé reste,
@@ -488,19 +575,12 @@ class Agent:
         # en sachant ce qui est à l'agent.
         self.state.mark(mail.id, owned, flagged=flagged, done=False)
 
-        entry = {
-            "run_id": run_id,
-            "time": datetime.now().isoformat(timespec="seconds"),
-            "id": mail.id,
-            "subject": mail.subject[:100],
-            "sender": mail.address,
-            "added_labels": [label for label in labels if label not in categories],
-            "removed_labels": [label for label in categories if label not in labels],
-            "owned_before": owned_before,
-            "flagged_before": flagged_before,
-            "flag_change": flag_change,
-            "moved_to": None,
-        }
+        entry = self._log_entry(
+            run_id, mail,
+            added=[label for label in labels if label not in categories],
+            removed=[label for label in categories if label not in labels],
+            owned_before=owned_before, flagged_before=flagged_before, flag_change=flag_change,
+        )
         try:
             if decision.folder:
                 folder_id, _ = ensure_folder(self.mailbox, folders, decision.folder)
@@ -648,20 +728,22 @@ def save_digest(home: Path, report: RunReport, digest: str) -> Path | None:
 def render_digest(report: RunReport) -> str:
     """Résumé en français de ce qui demande l'attention, au format Markdown."""
     mode = "simulation, rien n'a été modifié" if not report.apply else "tri appliqué"
-    done = [o for o in report.outcomes if o.decision and not o.error]
+    done = [o for o in report.outcomes if o.decision and not o.error and not o.note]
     moved = [o for o in done if o.decision.folder]
     left = [o for o in done if not o.decision.folder]
+    untouched = [o for o in report.outcomes if o.note]
     # Un mail urgent reste signalé comme tel même si son rangement a échoué.
-    urgent = [o for o in report.outcomes if o.decision and o.decision.urgent]
-    lines = [
-        f"# Résumé du tri du {datetime.now():%d/%m/%Y à %H:%M} ({mode})",
-        "",
-        f"{len(report.outcomes)} mails analysés : {len(moved)} {'rangés' if report.apply else 'à ranger'}, "
-        f"{len(left)} laissés en boîte de réception, {len(report.errors)} en erreur. "
-        f"Ignorés : {report.skipped_seen} déjà traités, {report.skipped_events} invitations.",
-    ]
+    urgent = [o for o in report.outcomes if o.decision and o.decision.urgent and not o.note]
+    summary = (f"{len(report.outcomes)} mails analysés : {len(moved)} {'rangés' if report.apply else 'à ranger'}, "
+               f"{len(left)} laissés en boîte de réception, {len(report.errors)} en erreur. ")
+    if untouched:
+        summary += f"{len(untouched)} déplacés ou supprimés par vous pendant le passage, laissés tels quels. "
+    summary += f"Ignorés : {report.skipped_seen} déjà traités, {report.skipped_events} invitations."
+    lines = [f"# Résumé du tri du {datetime.now():%d/%m/%Y à %H:%M} ({mode})", "", summary]
     if report.aborted:
         lines.extend(["", f"**Passage interrompu avant la fin** : {report.aborted}"])
+    for warning in report.warnings:
+        lines.extend(["", f"**Attention** : {warning}"])
 
     def section(title: str, selected: list[Outcome]) -> None:
         if not selected:

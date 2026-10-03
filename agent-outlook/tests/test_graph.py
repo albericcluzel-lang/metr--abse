@@ -109,6 +109,12 @@ def test_get_message_reads_only_categories_flag_and_folder():
     assert session.calls[0]["params"] == {"$select": "categories,flag,parentFolderId"}
 
 
+def test_inbox_folder():
+    client, session = make_client([FakeResponse(payload={"id": "AAMk", "displayName": "Boîte de réception"})])
+    assert client.inbox_folder()["displayName"] == "Boîte de réception"
+    assert session.calls[0]["url"].endswith("/me/mailFolders/inbox")
+
+
 def test_folder_name():
     client, session = make_client([FakeResponse(payload={"displayName": "Éléments supprimés"})])
     assert client.folder_name("AB/C=") == "Éléments supprimés"

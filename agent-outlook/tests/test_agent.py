@@ -72,6 +72,9 @@ class FakeMailbox:
             self.events.append(("list", message["id"]))
             yield message
 
+    def inbox_folder(self):
+        return {"id": "inbox", "displayName": "Boîte de réception"}
+
     def get_body(self, message_id):
         message = next(m for m in self.messages if m["id"] == message_id)
         return message["body"]["content"]
@@ -389,8 +392,14 @@ def test_failed_move_keeps_track_of_agent_labels_for_the_retry(tmp_path):
     assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
 
 
-def test_a_mail_that_keeps_failing_is_set_aside_even_when_alone(tmp_path, monkeypatch):
+@pytest.fixture
+def no_failure_delays(monkeypatch):
+    """Passages successifs rapprochés : les délais de la règle d'abandon sont mis à zéro."""
     monkeypatch.setattr(StateStore, "GIVE_UP_AFTER", timedelta(0))
+    monkeypatch.setattr(StateStore, "FAILURE_SPACING", timedelta(0))
+
+
+def test_a_mail_that_keeps_failing_is_set_aside_even_when_alone(tmp_path, no_failure_delays):
     agent, mailbox = make_agent(tmp_path, [raw_mail("bad")], [RuntimeError("refusé par le filtre")] * 3)
     agent.run(apply=False, limit=10)  # une simulation ne compte pas
     for attempt in range(3):
@@ -403,18 +412,25 @@ def test_a_mail_that_keeps_failing_is_set_aside_even_when_alone(tmp_path, monkey
     assert mailbox.current["bad"]["categories"] == []
 
 
-def test_quick_repeated_failures_do_not_set_a_mail_aside(tmp_path):
-    # Panne ou saturation passagère : 3 échecs en quelques minutes ne suffisent pas.
+def test_brief_outages_do_not_set_a_healthy_mail_aside(tmp_path):
+    state = StateStore(tmp_path / "state.json")
+    friday = datetime(2026, 10, 2, 17, 45)
+    # Vendredi soir, deux échecs à 15 minutes d'écart (une seule panne) : comptés une fois.
+    assert not state.record_failure("1", now=friday)
+    assert not state.record_failure("1", now=friday + timedelta(minutes=15))
+    # Lundi matin, un nouvel échec passager : 2 seulement, le mail n'est pas abandonné.
+    assert not state.record_failure("1", now=friday + timedelta(days=3))
+    assert state.failure_count("1") == 2
+
+
+def test_a_mail_failing_every_quarter_hour_is_set_aside_after_a_day(tmp_path):
     state = StateStore(tmp_path / "state.json")
     start = datetime(2026, 10, 3, 9, 0)
-    assert not state.record_failure("1", now=start)
-    assert not state.record_failure("1", now=start + timedelta(minutes=15))
-    assert not state.record_failure("1", now=start + timedelta(minutes=30))
-    assert state.record_failure("1", now=start + timedelta(hours=24))
+    given_up = [state.record_failure("1", now=start + timedelta(minutes=15 * i)) for i in range(97)]
+    assert given_up.index(True) == 96  # 24 h après le premier échec
 
 
-def test_failures_at_the_move_step_are_counted_too(tmp_path, monkeypatch):
-    monkeypatch.setattr(StateStore, "GIVE_UP_AFTER", timedelta(0))
+def test_failures_at_the_move_step_are_counted_too(tmp_path, no_failure_delays):
     agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()] * 3)
     mailbox.move_message = failing("ErrorMoveCopyFailed")
     for attempt in range(3):
@@ -427,6 +443,52 @@ def test_run_stops_after_several_errors_in_a_row(tmp_path):
     agent, _ = make_agent(tmp_path, messages, [RuntimeError("OpenAI surchargé")] * 8)
     report = agent.run(apply=True, limit=10)
     assert len(report.outcomes) == 5 and "5 erreurs de suite" in report.aborted
+
+
+def test_mails_that_already_failed_do_not_stop_the_run(tmp_path):
+    # Ex. : 5 mails protégés, toujours en échec, en tête de boîte : les suivants passent quand même.
+    messages = [raw_mail(f"protégé-{i}") for i in range(5)] + [raw_mail("normal")]
+    agent, mailbox = make_agent(tmp_path, messages, [RuntimeError("403")] * 5 + [verdict()])
+    for i in range(5):
+        agent.state.record_failure(f"protégé-{i}")
+    report = agent.run(apply=True, limit=10)
+    assert not report.aborted and report.outcomes[-1].applied
+
+
+def test_mail_moved_or_deleted_by_the_user_during_the_run_is_left_alone(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1", "Pub")], [])
+    mailbox.folder_names["corbeille-id"] = "Éléments supprimés"
+
+    def slow_classify(mail):
+        mailbox.location["1"] = "corbeille-id"  # supprimé pendant que l'IA réfléchit
+        return verdict("newsletters")
+
+    agent.classify = slow_classify
+    report = agent.run(apply=True, limit=10)
+    assert mailbox.writes == [] and mailbox.location["1"] == "corbeille-id"
+    assert "laissé tel quel" in report.outcomes[0].note and not report.errors
+    assert "1 déplacés ou supprimés par vous" in render_digest(report)
+    assert agent.state.seen("1")
+
+
+def test_inbox_is_recognised_by_name_when_its_id_is_written_differently(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    mailbox.location["1"] = "AAMkAD-autre-écriture"
+    mailbox.folder_names["AAMkAD-autre-écriture"] = "Boîte de réception"
+    assert agent.run(apply=True, limit=10).outcomes[0].applied
+
+
+def test_state_file_locked_by_windows_does_not_lose_the_report(tmp_path, monkeypatch):
+    agent, _ = make_agent(tmp_path, [raw_mail("1", "Coffrage")], [verdict(urgent=True)])
+
+    def locked():
+        raise PermissionError(13, "Accès refusé", str(tmp_path / "state.json"))
+
+    monkeypatch.setattr(agent.state, "save", locked)
+    report = agent.run(apply=True, limit=10)
+    assert report.outcomes[0].applied and report.warnings
+    digest = render_digest(report)
+    assert "Coffrage" in digest and "État non enregistré" in digest
 
 
 def test_categories_are_reread_just_before_writing(tmp_path):
@@ -445,11 +507,17 @@ def test_reading_resumes_where_the_last_complete_run_stopped(tmp_path):
     agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()] * 3)
     agent.run(apply=True, limit=10)
     assert mailbox.listed_since == [None]  # premier passage : toute la boîte
+    # Point de reprise pris sur l'heure du serveur (date de réception), pas sur l'horloge du PC.
     watermark = agent.state.watermark()
-    assert watermark is not None
+    assert watermark == datetime.fromisoformat(mailbox.messages[0]["receivedDateTime"])
 
     agent.run(apply=True, limit=10)
     assert mailbox.listed_since[-1] == watermark - timedelta(days=1)  # ensuite : depuis le dernier passage
+
+    # Une fois par jour, toute la boîte est relue (mail sorti des indésirables avec une date ancienne).
+    agent.state.set_last_full_scan(datetime.now(timezone.utc) - timedelta(hours=25))
+    agent.run(apply=True, limit=10)
+    assert mailbox.listed_since[-1] is None
 
     agent.run(apply=False, limit=10, reprocess=True)  # re-classement explicite : toute la boîte
     assert mailbox.listed_since[-1] is None

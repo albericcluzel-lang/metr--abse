@@ -106,7 +106,7 @@ Mac/Linux (cron) :
 */15 * * * * cd ~/agent-outlook && .venv/bin/python -m outlook_agent run --apply
 ```
 
-L'agent retient où il en est : après un passage complet, il ne relit que les mails arrivés depuis, avec une marge d'un jour. Un PC éteint tout un week-end ne fait donc rien manquer. Les 50 mails par passage (`--limit`) sont un plafond : s'il y en a plus, le reste est traité aux passages suivants.
+L'agent retient où il en est : après un passage complet, il ne relit que les mails arrivés depuis, avec une marge d'un jour et d'après l'heure du serveur Microsoft. Un PC éteint tout un week-end ne fait donc rien manquer. Une fois par jour, il relit toute la boîte, pour rattraper un mail revenu avec une date ancienne (sorti des indésirables, par exemple). Un mail que vous déplacez ou supprimez pendant un passage n'est pas touché. Les 50 mails par passage (`--limit`) sont un plafond : s'il y en a plus, le reste est traité aux passages suivants.
 
 Une tâche planifiée ne se reconnecte jamais seule : si Microsoft demande une nouvelle connexion (jeton expiré, politique de sécurité), elle s'arrête avec un message ; relancez `login`. De même, si la clé OpenAI est refusée, le crédit épuisé ou le réseau coupé, le passage s'arrête dès la première erreur, avec un message clair. Deux passages ne peuvent pas tourner en même temps : si la tâche planifiée tourne déjà, un lancement manuel l'indique et s'arrête.
 

@@ -43,6 +43,23 @@ def test_token_cache_is_written_atomically_and_privately(settings):
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_atomic_write_retries_while_windows_holds_the_file(tmp_path, monkeypatch):
+    from outlook_agent import files
+
+    real_replace, attempts = files.os.replace, []
+
+    def busy_then_free(source, target):
+        attempts.append(1)
+        if len(attempts) < 3:
+            raise PermissionError(13, "Le fichier est utilisé par un autre processus")
+        real_replace(source, target)
+
+    monkeypatch.setattr(files.os, "replace", busy_then_free)
+    monkeypatch.setattr(files.time, "sleep", lambda seconds: None)
+    files.write_atomic(tmp_path / "state.json", "{}")
+    assert (tmp_path / "state.json").read_text() == "{}" and len(attempts) == 3
+
+
 def test_missing_client_id_is_reported(settings):
     from outlook_agent.config import ConfigError
 

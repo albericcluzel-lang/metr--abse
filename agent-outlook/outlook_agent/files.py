@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
+
+REPLACE_ATTEMPTS = 5
 
 
 def write_atomic(path: Path, text: str, *, private: bool = False) -> None:
@@ -18,4 +21,13 @@ def write_atomic(path: Path, text: str, *, private: bool = False) -> None:
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())  # sur le disque avant le renommage, même en cas de coupure
-    os.replace(temporary, path)
+    for attempt in range(REPLACE_ATTEMPTS):
+        try:
+            os.replace(temporary, path)
+            return
+        except PermissionError:
+            # Sous Windows, un antivirus ou l'indexation tient parfois le fichier un instant.
+            if attempt == REPLACE_ATTEMPTS - 1:
+                temporary.unlink(missing_ok=True)
+                raise
+            time.sleep(0.2)

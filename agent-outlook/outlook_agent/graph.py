@@ -12,7 +12,8 @@ from .config import FatalError
 
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 # Sans le corps : il n'est téléchargé que pour les mails à analyser (get_body).
-LIST_FIELDS = "id,subject,from,receivedDateTime,hasAttachments,importance,categories,flag"
+# Catégories et drapeau sont relus juste avant d'écrire (get_message), pas pris dans la liste.
+LIST_FIELDS = "id,subject,from,receivedDateTime,hasAttachments,importance"
 PAGE_SIZE = 200  # liste légère (sans corps) : peu de requêtes même pour une grosse boîte
 RETRY_STATUS = (429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 5
@@ -96,6 +97,10 @@ class GraphClient:
             utc = since.astimezone(timezone.utc)
             params["$filter"] = f"receivedDateTime ge {utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         return self._pages(f"{GRAPH_URL}/me/mailFolders/inbox/messages", params)
+
+    def inbox_folder(self) -> dict:
+        """Identifiant et nom (selon la langue) de la boîte de réception."""
+        return self._request("GET", f"{GRAPH_URL}/me/mailFolders/inbox", params={"$select": "id,displayName"})
 
     def get_body(self, message_id: str) -> str:
         """Corps du mail, en texte brut."""
