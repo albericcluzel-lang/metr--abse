@@ -44,33 +44,37 @@ def sleeps(monkeypatch):
     return recorded
 
 
-def test_list_inbox_follows_pagination_and_respects_limit():
+def test_inbox_listing_is_lazy_and_follows_pagination():
     client, session = make_client([
         FakeResponse(payload={"value": [{"id": "1"}, {"id": "2"}], "@odata.nextLink": "https://next"}),
         FakeResponse(payload={"value": [{"id": "3"}, {"id": "4"}]}),
     ])
-    messages = client.list_inbox_messages(limit=3)
-    assert [m["id"] for m in messages] == ["1", "2", "3"]
+    messages = client.iter_inbox_messages()
+    assert [next(messages)["id"], next(messages)["id"]] == ["1", "2"]
+    assert len(session.calls) == 1  # la page suivante n'est demandée qu'au besoin
+    assert [m["id"] for m in messages] == ["3", "4"]
     first, second = session.calls
     assert first["url"].endswith("/me/mailFolders/inbox/messages")
     assert first["params"]["$orderby"] == "receivedDateTime desc"
     assert second["url"] == "https://next" and second["params"] is None
 
 
-def test_list_inbox_asks_for_stable_ids_text_body_and_bearer_token():
+def test_inbox_listing_uses_stable_ids_and_does_not_download_bodies():
     client, session = make_client([FakeResponse(payload={"value": []})])
-    client.list_inbox_messages(limit=5, since_days=2)
+    list(client.iter_inbox_messages(since_days=2))
     call = session.calls[0]
     assert call["headers"]["Authorization"] == "Bearer jeton"
-    assert 'IdType="ImmutableId"' in call["headers"]["Prefer"]
-    assert 'outlook.body-content-type="text"' in call["headers"]["Prefer"]
+    assert call["headers"]["Prefer"] == 'IdType="ImmutableId"'
+    assert "body" not in call["params"]["$select"].split(",")
     assert call["params"]["$filter"].startswith("receivedDateTime ge ")
 
 
-def test_other_calls_do_not_request_text_body():
-    client, session = make_client([FakeResponse(payload={"value": []})])
-    client.child_folders()
-    assert "body-content-type" not in session.calls[0]["headers"]["Prefer"]
+def test_get_body_asks_for_plain_text():
+    client, session = make_client([FakeResponse(payload={"body": {"content": "Bonjour"}})])
+    assert client.get_body("1") == "Bonjour"
+    call = session.calls[0]
+    assert call["params"] == {"$select": "body"}
+    assert 'outlook.body-content-type="text"' in call["headers"]["Prefer"]
 
 
 def test_move_message_quotes_the_id_and_sends_destination():
@@ -133,5 +137,32 @@ def test_gives_up_after_too_many_attempts_without_a_useless_last_wait(sleeps):
 
 def test_error_status_raises_with_details():
     client, _ = make_client([FakeResponse(403, payload={"error": "Forbidden"})])
-    with pytest.raises(GraphError, match="403"):
+    with pytest.raises(GraphError, match="403") as error:
         client.master_categories()
+    assert error.value.status == 403
+
+
+def test_create_folder_that_already_exists_returns_the_existing_one():
+    # Ex. : la première tentative a créé le dossier mais sa réponse s'est perdue.
+    client, _ = make_client([
+        FakeResponse(409, payload={"error": "ErrorFolderExists"}),
+        FakeResponse(payload={"value": [{"id": "existant", "displayName": "Devis et factures"}]}),
+    ])
+    assert client.create_folder("Devis et factures") == "existant"
+
+
+def test_create_folder_conflict_without_a_matching_folder_still_fails():
+    client, _ = make_client([
+        FakeResponse(409, payload={"error": "conflit"}),
+        FakeResponse(payload={"value": []}),
+    ])
+    with pytest.raises(GraphError):
+        client.create_folder("Devis et factures")
+
+
+def test_create_master_category_ignores_already_existing():
+    client, _ = make_client([FakeResponse(409, payload={"error": "exists"})])
+    client.create_master_category("Urgent", "preset0")
+    client, _ = make_client([FakeResponse(403, payload={"error": "Forbidden"})])
+    with pytest.raises(GraphError):
+        client.create_master_category("Urgent", "preset0")

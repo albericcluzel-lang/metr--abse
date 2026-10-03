@@ -1,9 +1,12 @@
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from outlook_agent.agent import Agent, Mail, decide, render_digest, setup_mailbox
+from outlook_agent.agent import (
+    Agent, Mail, StateStore, decide, is_meeting_message, render_digest, setup_mailbox,
+)
 from outlook_agent.classifier import Verdict, build_system_prompt, classify
 from outlook_agent.config import CATEGORIES, URGENT_FOLDER, Settings
 
@@ -41,14 +44,21 @@ class FakeMailbox:
         self.messages = messages
         self.folders = dict(folders or {})
         self.writes = []
+        self.events = []  # lectures et écritures dans l'ordre, pour vérifier l'enchaînement
         # État « côté serveur » de chaque mail, tenu à jour par update_message.
         self.current = {
             m["id"]: {"categories": list(m.get("categories", [])), "flag": dict(m.get("flag", {}))}
             for m in messages
         }
 
-    def list_inbox_messages(self, limit, since_days=None):
-        return self.messages[:limit]
+    def iter_inbox_messages(self, since_days=None):
+        for message in self.messages:
+            self.events.append(("list", message["id"]))
+            yield message
+
+    def get_body(self, message_id):
+        message = next(m for m in self.messages if m["id"] == message_id)
+        return message["body"]["content"]
 
     def get_message(self, message_id):
         state = self.current[message_id]
@@ -63,6 +73,7 @@ class FakeMailbox:
 
     def update_message(self, message_id, categories=None, flag_status=None):
         self.writes.append(("update", message_id, categories, flag_status))
+        self.events.append(("write", message_id))
         if categories is not None:
             self.current[message_id]["categories"] = list(categories)
         if flag_status is not None:
@@ -84,12 +95,18 @@ def make_agent(tmp_path, messages, verdicts, folders=None, **settings_overrides)
 
     def fake_classify(mail):
         answer = next(answers)
-        if isinstance(answer, Exception):
+        if isinstance(answer, BaseException):
             raise answer
         return answer
 
     agent = Agent(mailbox, fake_classify, make_settings(tmp_path, **settings_overrides), CATEGORIES)
     return agent, mailbox
+
+
+def failing(message):
+    def fail(*args, **kwargs):
+        raise RuntimeError(message)
+    return fail
 
 
 # --- Décision --------------------------------------------------------------------------------
@@ -131,14 +148,14 @@ def test_decide_does_not_trust_out_of_range_confidence(bad):
 # --- Lecture des mails ---------------------------------------------------------------------
 
 def test_mail_from_graph_cleans_and_truncates_body():
-    mail = Mail.from_graph(raw_mail("1", body="  ligne 1 \n\n\n ligne   2 " + "x" * 200), body_chars=20)
+    mail = Mail.from_graph(raw_mail("1"), "  ligne 1 \n\n\n ligne   2 " + "x" * 200, body_chars=20)
     assert mail.body == "ligne 1 ligne 2 xxxx"
     assert mail.sender == "Jean Dupont" and mail.address == "jean@exemple.fr"
 
 
-def test_mail_from_graph_detects_meeting_messages():
-    assert Mail.from_graph(raw_mail("1", **{"@odata.type": "#microsoft.graph.eventMessageRequest"}), 50).is_event
-    assert not Mail.from_graph(raw_mail("1"), 50).is_event
+def test_meeting_messages_are_detected():
+    assert is_meeting_message(raw_mail("1", **{"@odata.type": "#microsoft.graph.eventMessageRequest"}))
+    assert not is_meeting_message(raw_mail("1"))
 
 
 # --- Passage de l'agent ------------------------------------------------------------------------
@@ -188,6 +205,18 @@ def test_low_confidence_mail_is_labelled_but_not_moved(tmp_path):
     assert mailbox.writes == [("update", "1", ["À vérifier"], None)]
 
 
+def test_user_label_with_an_agent_name_is_never_removed(tmp_path):
+    # « Urgent » posé par l'utilisateur (ou une règle Outlook) avant le premier passage.
+    message = raw_mail("1", categories=["Urgent"])
+    agent, mailbox = make_agent(tmp_path, [message], [verdict(confidence=0.2), verdict("chantier")])
+    agent.run(apply=True, limit=10)
+    assert mailbox.current["1"]["categories"] == ["Urgent", "À vérifier"]
+
+    mailbox.messages[0]["categories"] = list(mailbox.current["1"]["categories"])
+    agent.run(apply=True, limit=10, reprocess=True)
+    assert mailbox.current["1"]["categories"] == ["Urgent", "Chantier"]
+
+
 def test_reclassifying_replaces_agent_labels_but_keeps_user_labels(tmp_path):
     agent, mailbox = make_agent(
         tmp_path, [raw_mail("1", categories=["Perso"])], [verdict(confidence=0.2), verdict("fournisseurs")]
@@ -222,6 +251,26 @@ def test_processed_mails_are_skipped_next_time_unless_reprocess(tmp_path):
     assert len(forced.outcomes) == 1
 
 
+def test_limit_counts_only_mails_to_analyse_so_old_backlog_is_reached(tmp_path):
+    # Les 3 mails les plus récents ont déjà été traités et sont restés en boîte de réception.
+    messages = [raw_mail(str(i)) for i in range(6)]
+    agent, mailbox = make_agent(tmp_path, messages, [verdict(), verdict()])
+    for mail_id in ("0", "1", "2"):
+        agent.state.mark(mail_id, ["À vérifier"])
+    report = agent.run(apply=False, limit=2)
+    assert [o.mail.id for o in report.outcomes] == ["3", "4"]
+    assert report.skipped_seen == 3
+    assert ("list", "5") not in mailbox.events  # inutile d'aller plus loin une fois la limite atteinte
+
+
+def test_whole_list_is_read_before_any_change(tmp_path):
+    messages = [raw_mail("1"), raw_mail("2"), raw_mail("3")]
+    agent, mailbox = make_agent(tmp_path, messages, [verdict()] * 3)
+    agent.run(apply=True, limit=10)
+    kinds = [kind for kind, _ in mailbox.events]
+    assert kinds == ["list"] * 3 + ["write"] * 3
+
+
 def test_one_failing_mail_does_not_stop_the_others(tmp_path):
     messages = [raw_mail("1", "Premier"), raw_mail("2", "Second")]
     agent, mailbox = make_agent(tmp_path, messages, [RuntimeError("API en panne"), verdict()])
@@ -231,16 +280,35 @@ def test_one_failing_mail_does_not_stop_the_others(tmp_path):
     assert not agent.state.seen("1") and agent.state.seen("2")
 
 
+def test_unreadable_body_is_reported_and_retried_later(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1", "Illisible")], [])
+    mailbox.get_body = failing("corps indisponible")
+    report = agent.run(apply=True, limit=10)
+    assert report.errors[0].error.startswith("lecture") and report.errors[0].mail.subject == "Illisible"
+    assert not agent.state.seen("1")
+
+
 def test_failed_move_is_reported_and_retried_later(tmp_path):
     agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
-
-    def broken_move(message_id, destination):
-        raise RuntimeError("Graph indisponible")
-
-    mailbox.move_message = broken_move
+    mailbox.move_message = failing("Graph indisponible")
     report = agent.run(apply=True, limit=10)
     assert "Graph indisponible" in report.errors[0].error
     assert not agent.state.seen("1")
+
+
+def test_state_is_saved_even_if_the_run_is_interrupted(tmp_path):
+    agent, _ = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [verdict(), KeyboardInterrupt()])
+    with pytest.raises(KeyboardInterrupt):
+        agent.run(apply=True, limit=10)
+    reloaded = StateStore(tmp_path / "state.json")
+    assert reloaded.seen("1") and not reloaded.seen("2")
+    assert not (tmp_path / "state.json.tmp").exists()
+
+
+def test_state_from_an_older_format_is_still_read(tmp_path):
+    (tmp_path / "state.json").write_text(json.dumps({"processed": {"1": "2026-10-01T08:00:00"}}), encoding="utf-8")
+    state = StateStore(tmp_path / "state.json")
+    assert state.seen("1") and state.agent_labels("1") == []
 
 
 # --- Annulation ----------------------------------------------------------------------------------
@@ -268,6 +336,25 @@ def test_undo_keeps_a_flag_the_agent_did_not_set(tmp_path):
     mailbox.writes.clear()
     agent.undo(apply=True)
     assert mailbox.writes[0] == ("update", "1", [], None)
+
+
+def test_second_undo_targets_the_previous_run_not_the_same_one(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    agent.run(apply=True, limit=10)
+    assert agent.undo(apply=True)[0].restored
+    mailbox.writes.clear()
+    assert agent.undo(apply=True) == []  # plus rien à annuler
+    assert mailbox.writes == []
+
+
+def test_partially_failed_undo_stays_the_default_target(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    agent.run(apply=True, limit=10)
+    original_move = mailbox.move_message
+    mailbox.move_message = failing("Graph indisponible")
+    assert agent.undo(apply=True)[0].error
+    mailbox.move_message = original_move
+    assert agent.undo(apply=True)[0].restored
 
 
 def test_corrupted_state_and_truncated_log_do_not_crash(tmp_path):
@@ -298,13 +385,25 @@ def test_setup_creates_all_folders_and_labels(tmp_path):
 
 def test_setup_survives_missing_category_permission(tmp_path):
     mailbox = FakeMailbox([])
-
-    def forbidden():
-        raise RuntimeError("403 Forbidden")
-
-    mailbox.master_categories = forbidden
+    mailbox.master_categories = failing("403 Forbidden")
     messages = setup_mailbox(mailbox, CATEGORIES)
-    assert any("non créées" in message for message in messages)
+    assert any("permission MailboxSettings.ReadWrite" in message for message in messages)
+
+
+def test_setup_continues_when_one_category_fails(tmp_path):
+    mailbox = FakeMailbox([])
+    created = []
+
+    def create(name, color):
+        if name == "Chantier":
+            raise RuntimeError("500")
+        created.append(name)
+
+    mailbox.create_master_category = create
+    messages = setup_mailbox(mailbox, CATEGORIES)
+    assert "Urgent" in created and "Fournisseurs" in created
+    assert any(message.startswith("Catégorie non créée : Chantier") for message in messages)
+    assert not any("permission" in message for message in messages)
 
 
 def test_digest_lists_urgent_actions_and_errors(tmp_path):
@@ -326,16 +425,21 @@ def test_digest_lists_each_mail_once_and_excludes_failed_moves(tmp_path):
     agent, mailbox = make_agent(
         tmp_path, messages, [verdict(confidence=0.3, action_required=True), verdict()]
     )
-
-    def broken_move(message_id, destination):
-        raise RuntimeError("Graph indisponible")
-
-    mailbox.move_message = broken_move
+    mailbox.move_message = failing("Graph indisponible")
     digest = render_digest(agent.run(apply=True, limit=10))
     assert digest.count("Incertain") == 1 and digest.count("Bloqué") == 1
     assert "0 rangés, 1 laissés en boîte de réception, 1 en erreur" in digest
     assert "## Répartition" not in digest
     assert "Bloqué : application" in digest
+
+
+def test_digest_keeps_an_urgent_mail_visible_when_its_move_failed(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1", "Échafaudage")], [verdict(urgent=True)])
+    mailbox.move_message = failing("Graph indisponible")
+    digest = render_digest(agent.run(apply=True, limit=10))
+    urgent_section = digest.split("## Urgents")[1]
+    assert "Échafaudage" in urgent_section and "NON RANGÉ" in urgent_section
+    assert digest.count("Échafaudage") == 1
 
 
 def test_system_prompt_mentions_every_category():
@@ -352,7 +456,7 @@ def test_classify_returns_parsed_verdict_or_none_on_refusal():
             choices=[SimpleNamespace(message=SimpleNamespace(parsed=value))]))
         return SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
-    mail = Mail.from_graph(raw_mail("1"), 50)
+    mail = Mail.from_graph(raw_mail("1"), "Corps", 50)
     assert classify(client_returning(parsed), "m", mail, CATEGORIES, "ctx") == parsed
     assert classify(client_returning(None), "m", mail, CATEGORIES, "ctx") is None
 

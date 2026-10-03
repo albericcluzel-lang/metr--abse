@@ -27,6 +27,11 @@ def test_settings_reject_out_of_range_environment(monkeypatch, name, value):
         Settings.from_env()
 
 
+def test_settings_accept_french_decimal_comma(monkeypatch):
+    monkeypatch.setenv("OUTLOOK_MIN_CONFIDENCE", "0,7")
+    assert Settings.from_env().min_confidence == 0.7
+
+
 def test_network_errors_are_reported_without_traceback(monkeypatch, capsys):
     def offline(settings, args):
         raise requests.ConnectionError("hors ligne")

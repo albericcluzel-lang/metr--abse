@@ -109,7 +109,7 @@ class Settings:
         home = Path(os.environ.get("OUTLOOK_AGENT_HOME", "~/.outlook_agent")).expanduser()
         try:
             body_chars = int(os.environ.get("OUTLOOK_BODY_CHARS", "1200"))
-            min_confidence = float(os.environ.get("OUTLOOK_MIN_CONFIDENCE", "0.6"))
+            min_confidence = float(os.environ.get("OUTLOOK_MIN_CONFIDENCE", "0.6").replace(",", "."))
         except ValueError as exc:
             raise ConfigError(f"Valeur numérique invalide dans l'environnement : {exc}") from exc
         if not 0.0 <= min_confidence <= 1.0:

@@ -117,7 +117,8 @@ def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
         return 0
     for item in items:
         status = "remis" if item.restored else (f"ERREUR {item.error}" if item.error else "à remettre")
-        print(f"[{status}] {item.entry['subject']} (était rangé dans : {item.entry['moved_to'] or 'boîte de réception'})")
+        print(f"[{status}] {item.entry.get('subject', '(sans objet)')} "
+              f"(était rangé dans : {item.entry['moved_to'] or 'boîte de réception'})")
     if not args.apply:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour annuler réellement.")
     return 1 if any(item.error for item in items) else 0
