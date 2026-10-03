@@ -111,6 +111,15 @@ def test_local_model_gets_safe_defaults_and_cloud_providers_their_own(monkeypatc
     assert Settings.from_env().llm_temperature is None
 
 
+def test_reasoning_effort_none_is_really_sent(monkeypatch):
+    # « none » est une vraie valeur (Mistral Small, OpenAI, Ollama) : elle doit partir telle quelle.
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.mistral.ai/v1")
+    monkeypatch.setenv("OUTLOOK_LLM_REASONING_EFFORT", "none")
+    assert cli._request_options(Settings.from_env()) == {"reasoning_effort": "none"}
+    monkeypatch.setenv("OUTLOOK_LLM_REASONING_EFFORT", "")
+    assert cli._request_options(Settings.from_env()) == {}
+
+
 def test_local_model_is_never_reached_through_a_proxy(monkeypatch):
     import json
     import threading

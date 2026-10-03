@@ -4,7 +4,10 @@ import openai
 import pytest
 
 from outlook_agent.agent import Mail
-from outlook_agent.classifier import Classifier, ClassifierUnavailable, _json_object, classify
+from outlook_agent.classifier import (
+    Classifier, ClassifierUnavailable, RequestTooLarge, TruncatedAnswer, _json_object, classify,
+)
+from outlook_agent.config import FatalError
 from outlook_agent.config import CATEGORIES, Category
 
 MAIL = Mail(id="1", subject="Objet", sender="Jean", address="jean@exemple.fr", received="",
@@ -21,8 +24,9 @@ def sdk_error(cls, **attributes):
     return error
 
 
-def completion(parsed=None, content=None):
-    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed, content=content))])
+def completion(parsed=None, content=None, finish_reason="stop"):
+    message = SimpleNamespace(parsed=parsed, content=content)
+    return SimpleNamespace(choices=[SimpleNamespace(message=message, finish_reason=finish_reason)])
 
 
 class FakeClient:
@@ -172,10 +176,36 @@ def test_provider_options_are_sent_in_every_mode():
         assert {key: kwargs[key] for key in options} == options
 
 
-def test_tokens_per_minute_limit_of_groq_stops_the_run():
+def test_request_too_large_is_an_error_for_this_mail_only():
+    # Groq 413 : cette requête-là dépasse à elle seule la limite ; attendre n'y change rien, et
+    # arrêter le passage bloquerait tous les mails suivants.
     error = sdk_error(openai.APIStatusError, status_code=413, message="Request too large: tokens per minute")
-    with pytest.raises(ClassifierUnavailable, match="jetons par minute"):
+    with pytest.raises(RequestTooLarge, match="OUTLOOK_BODY_CHARS") as raised:
         classify(raising(error), "m", MAIL, CATEGORIES, "ctx")
+    assert not isinstance(raised.value, FatalError)
+
+
+def test_exhausted_prepaid_credit_stops_the_run():
+    error = sdk_error(openai.APIStatusError, status_code=402, message="Payment Required")
+    with pytest.raises(ClassifierUnavailable, match="Crédit épuisé"):
+        classify(raising(error), "m", MAIL, CATEGORIES, "ctx")
+
+
+@pytest.mark.parametrize("mode", ["json", "text"])
+def test_answer_cut_by_the_token_limit_is_retried_later_not_taken_for_a_refusal(mode):
+    cut = completion(content="", finish_reason="length")
+    classifier = Classifier(FakeClient(create=lambda **kw: cut), "m", CATEGORIES, "ctx", json_mode=mode)
+    with pytest.raises(TruncatedAnswer):
+        classifier(MAIL)
+
+
+def test_a_failed_generation_is_not_mistaken_for_a_rejected_format():
+    failed = sdk_error(openai.BadRequestError, code="json_validate_failed",
+                       message="Generated JSON does not match the expected schema. Please adjust your prompt.")
+    classifier = Classifier(FakeClient(parse=lambda **kw: failed), "m", CATEGORIES, "ctx")
+    with pytest.raises(openai.BadRequestError):
+        classifier(MAIL)
+    assert classifier.mode == "schema"
 
 
 def test_rate_limit_is_not_swallowed_by_the_generic_status_branch():

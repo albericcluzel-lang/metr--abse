@@ -40,8 +40,8 @@ Situation au 3 octobre 2026, d'après une recherche contre-vérifiée. Les offre
 |---|---|---|---|
 | **A. Modèle local (Ollama)** | gratuit, sans limite | ne quittent pas le PC | le plus sûr ; il faut un PC correct et l'accord de la DSI pour installer |
 | **B. Mistral AI** (français) | gratuit (crédit mensuel inclus) | pas d'entraînement **si vous le désactivez d'abord** | bon compromis, entreprise européenne |
-| **C. Google Gemini** | gratuit | depuis la France, pas d'entraînement ; peuvent être traités hors UE | quotas gratuits confortables |
-| **D. Groq** | gratuit | pas d'entraînement ; serveurs hors UE | rapide, quotas serrés par minute |
+| **C. Google Gemini** | gratuit, mais clause à faire valider (sinon ~1 $ par mois) | depuis la France, pas d'entraînement ; peuvent être traités hors UE | quotas gratuits confortables |
+| **D. Groq** | gratuit | pas d'entraînement ; traités hors UE | rapide, quotas serrés par minute |
 | OpenAI (API payante) | ~1 € par mois | pas d'entraînement par défaut | si l'entreprise a déjà un compte |
 
 **À éviter pour des mails professionnels :**
@@ -62,7 +62,7 @@ Situation au 3 octobre 2026, d'après une recherche contre-vérifiée. Les offre
    ```
    Aucune clé n'est nécessaire. L'agent applique de lui-même les bons réglages locaux : température 0 (sans elle, les réponses sont aléatoires), 512 jetons au plus par réponse, et aucun passage par le proxy de l'entreprise.
 
-Comptez environ 10 à 25 secondes par mail sans carte graphique dédiée (estimation à mesurer sur votre PC), soit une à deux minutes par passage. Les cartes graphiques intégrées ne sont pas utilisées par défaut. Ne montez pas `OUTLOOK_BODY_CHARS` au-delà de 6000 : la mémoire de travail du modèle est de 4096 jetons par défaut, et au-delà Ollama couperait le début, c'est-à-dire les consignes. N'activez jamais `OLLAMA_DEBUG_LOG_REQUESTS`, qui écrirait le contenu des mails sur le disque.
+Comptez environ 10 à 25 secondes par mail sans carte graphique dédiée (estimation à mesurer sur votre PC), soit une à deux minutes par passage. Les cartes graphiques intégrées ne sont pas utilisées par défaut. Ne montez pas `OUTLOOK_BODY_CHARS` au-delà de 3500 : la mémoire de travail du modèle est de 4096 jetons par défaut, et au-delà Ollama couperait le début, c'est-à-dire les consignes, sans le signaler. Un mail rempli de liens compte vite beaucoup de jetons. Pour aller plus loin, ajoutez la variable `OLLAMA_CONTEXT_LENGTH=8192` et vérifiez la colonne CONTEXT de `ollama ps`. N'activez jamais `OLLAMA_DEBUG_LOG_REQUESTS`, qui écrirait le contenu des mails sur le disque.
 
 #### B. Mistral AI
 
@@ -95,11 +95,11 @@ Comptez environ 10 à 25 secondes par mail sans carte graphique dédiée (estima
 À savoir :
 - **Pas d'entraînement depuis l'Europe.** Les conditions de Google appliquent à l'offre gratuite, pour les utilisateurs en Europe (EEE), les règles de données de l'offre payante : vos mails ne servent pas à entraîner les modèles. L'agent doit tourner depuis la France.
 - **Ce qui reste conservé.** Google garde les requêtes environ 55 jours pour détecter les abus, et elles peuvent être traitées hors UE.
-- **Clause à faire valider.** Ces conditions réservent l'offre payante aux outils mis à disposition d'utilisateurs en Europe ; à faire trancher par votre employeur. L'offre payante coûte environ 1 $ par mois pour ce volume.
+- **Clause à faire valider avant usage.** Ces mêmes conditions imposent l'offre payante pour tout outil mis à disposition d'utilisateurs en Europe : l'offre gratuite pourrait donc ne pas être autorisée pour votre usage. Faites trancher la question par votre employeur. L'offre payante coûte environ 1 $ par mois pour ce volume, avec un prépaiement minimum de 5 $.
 
 #### D. Groq
 
-1. Créez une clé sur <https://console.groq.com>, sans carte. Le contrat exclut l'entraînement sur vos données. Les requêtes peuvent être journalisées jusqu'à 30 jours, et les serveurs sont hors UE.
+1. Créez une clé sur <https://console.groq.com>, sans carte. Le contrat exclut l'entraînement sur vos données. Les requêtes peuvent être journalisées jusqu'à 30 jours ; activez « Zero Data Retention » dans Settings → Data Controls si votre compte le propose. Le lieu de traitement n'est pas garanti (États-Unis, Canada, Arabie saoudite ou Finlande) et les données conservées le sont aux États-Unis.
 2. Dans `.env` :
    ```
    OPENAI_BASE_URL=https://api.groq.com/openai/v1
@@ -215,7 +215,10 @@ Une tâche planifiée ne se reconnecte jamais seule : si Microsoft demande une n
 | `MailboxNotEnabledForRESTAPI` | boîte hébergée sur un Exchange interne : Microsoft Graph ne fonctionne qu'avec Exchange Online |
 | `Connexion Microsoft requise` | relancer `python -m outlook_agent login` |
 | `Connexion au fournisseur d'IA impossible` | réseau coupé ou, en local, Ollama n'est pas démarré |
-| `Limite de requêtes atteinte` ou `Limite de jetons par minute` | limite de l'offre gratuite : le tri reprend au passage suivant ; augmentez `OUTLOOK_LLM_PAUSE` |
+| `Limite de requêtes atteinte` | limite de l'offre gratuite : le tri reprend au passage suivant ; augmentez `OUTLOOK_LLM_PAUSE` |
+| `requête trop grosse pour la limite du fournisseur (413)` | une seule requête dépasse la limite par minute (Groq) : vérifiez `OUTLOOK_LLM_MAX_TOKENS=1024` et baissez `OUTLOOK_BODY_CHARS` |
+| `réponse coupée par la limite de jetons` | le modèle manque de place pour répondre : augmentez `OUTLOOK_LLM_MAX_TOKENS` |
+| `Crédit épuisé` ou `quota épuisé` | rechargez le compte du fournisseur, ou attendez le renouvellement du quota |
 | `Modèle … introuvable` | nom de modèle erroné pour ce fournisseur (`OPENAI_MODEL`) |
 
 ## Tests

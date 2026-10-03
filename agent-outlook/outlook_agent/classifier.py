@@ -18,6 +18,14 @@ class ClassifierUnavailable(FatalError):
     """Le fournisseur d'IA refuse toutes les demandes (clé, quota, modèle, réseau)."""
 
 
+class RequestTooLarge(RuntimeError):
+    """Requête refusée car trop grosse pour ce fournisseur : erreur propre au mail."""
+
+
+class TruncatedAnswer(RuntimeError):
+    """Réponse coupée faute de jetons : erreur propre au mail, à réessayer (pas un refus)."""
+
+
 @lru_cache(maxsize=None)
 def verdict_model(keys: tuple[str, ...]) -> type[BaseModel]:
     """Réponse attendue de l'IA : `category` ne peut être que l'une des clés données."""
@@ -154,14 +162,19 @@ class Classifier:
                     "au prochain passage. Augmentez OUTLOOK_LLM_PAUSE si cela se répète."
                 ) from exc
             except openai.APIStatusError as exc:
-                # En dernier : classe parente des erreurs ci-dessus. 413 : Groq signale ainsi un
-                # dépassement de jetons par minute, que le SDK ne réessaie pas.
-                if exc.status_code != 413:
-                    raise
-                raise ClassifierUnavailable(
-                    "Limite de jetons par minute atteinte chez le fournisseur d'IA (offre gratuite ?) : le tri "
-                    "reprendra au prochain passage. Augmentez OUTLOOK_LLM_PAUSE ou baissez OUTLOOK_LLM_MAX_TOKENS."
-                ) from exc
+                # En dernier : classe parente des erreurs ci-dessus.
+                if exc.status_code == 402:  # crédit prépayé épuisé (Gemini payant, OpenRouter...)
+                    raise ClassifierUnavailable(
+                        "Crédit épuisé chez le fournisseur d'IA : rechargez le compte ou repassez à l'offre gratuite."
+                    ) from exc
+                if exc.status_code == 413:
+                    # Une seule requête dépasse la limite par minute (Groq) : attendre n'y change rien,
+                    # c'est une erreur propre à ce mail (règle d'abandon et seuil d'erreurs s'appliquent).
+                    raise RequestTooLarge(
+                        "requête trop grosse pour la limite du fournisseur d'IA (413) : baissez "
+                        "OUTLOOK_BODY_CHARS ou OUTLOOK_LLM_MAX_TOKENS"
+                    ) from exc
+                raise
 
     def _wait_turn(self) -> None:
         """Espace les appels d'au moins `pause` secondes (limites par minute des offres gratuites)."""
@@ -189,17 +202,26 @@ class Classifier:
         completion = self._client.chat.completions.create(
             model=self._model, messages=[{"role": "system", "content": system}, user], **extra,
         )
-        content = completion.choices[0].message.content
-        if not content:
-            return None  # refus ou réponse vide
-        return model.model_validate_json(_json_object(content))
+        choice = completion.choices[0]
+        if choice.finish_reason == "length":
+            # Raisonnement ou réponse coupés par la limite de jetons : à réessayer, pas un refus.
+            raise TruncatedAnswer("réponse coupée par la limite de jetons : augmentez OUTLOOK_LLM_MAX_TOKENS")
+        if not choice.message.content:
+            return None  # refus
+        return model.model_validate_json(_json_object(choice.message.content))
+
+
+# Une génération ratée (JSON non conforme) n'est pas un refus du format : erreur propre au mail.
+GENERATION_FAILURES = ("json_validate_failed", "failed_generation", "generated json", "failed to generate json")
 
 
 def _about_response_format(exc: Exception) -> bool:
     """L'erreur 400/422 porte-t-elle sur le format de réponse demandé (et pas sur autre chose) ?"""
-    details = " ".join(str(part) for part in (exc, getattr(exc, "message", ""), getattr(exc, "body", "")))
-    return any(word in details.lower() for word in ("response_format", "json_schema", "json_object",
-                                                     "structured output", "schema"))
+    details = " ".join(str(part) for part in (exc, getattr(exc, "message", ""), getattr(exc, "body", ""))).lower()
+    if any(marker in details for marker in GENERATION_FAILURES):
+        return False
+    return any(word in details for word in ("response_format", "json_schema", "json_object",
+                                             "structured output", "schema"))
 
 
 def _json_object(text: str) -> str:

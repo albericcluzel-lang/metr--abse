@@ -171,7 +171,9 @@ class Settings:
             json_mode=json_mode,
             llm_temperature=llm_temperature,
             llm_max_tokens=llm_max_tokens,
-            llm_reasoning_effort=_optional(_env("OUTLOOK_LLM_REASONING_EFFORT", "none"), str),
+            # Transmis tel quel, « none » compris (valeur réelle chez Mistral, OpenAI, Ollama) ;
+            # vide ou absent : non envoyé.
+            llm_reasoning_effort=_env("OUTLOOK_LLM_REASONING_EFFORT") or None,
         )
 
 
