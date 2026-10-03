@@ -5,12 +5,13 @@ import argparse
 import dataclasses
 import os
 import sys
+from urllib.parse import urlparse
 
 import requests
 
 from .agent import Agent, Outcome, RunLock, render_digest, save_digest, setup_mailbox
 from .auth import TokenProvider
-from .classifier import classify
+from .classifier import Classifier
 from .config import CATEGORIES, ConfigError, FatalError, Settings
 from .graph import GraphClient, GraphError
 
@@ -49,12 +50,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _openai_client():
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise ConfigError("OPENAI_API_KEY manquante : voir le README, étape 1.")
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+
+
+def _openai_client(settings: Settings):
+    """Client du fournisseur d'IA : OpenAI par défaut, ou tout service compatible (OPENAI_BASE_URL)."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key and urlparse(settings.llm_base_url).hostname in LOCAL_HOSTS:
+        key = "local"  # un modèle local (Ollama, LM Studio) n'a pas besoin de vraie clé
+    if not key:
+        raise ConfigError("OPENAI_API_KEY manquante : clé du fournisseur d'IA, voir le README, étape 1.")
     from openai import OpenAI
 
-    return OpenAI()
+    return OpenAI(api_key=key, base_url=settings.llm_base_url, max_retries=settings.llm_max_retries)
 
 
 def _mailbox(settings: Settings) -> GraphClient:
@@ -85,15 +93,11 @@ def cmd_setup(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         settings = dataclasses.replace(settings, min_confidence=args.min_confidence)
-    client = _openai_client()
+    classifier = Classifier(_openai_client(settings), settings.model, CATEGORIES, settings.user_context,
+                            json_mode=settings.json_mode, pause=settings.llm_pause)
     # Verrou pris avant de lire l'état : un passage qui se termine ne peut pas l'écrire entre-temps.
     with RunLock(settings.home):
-        agent = Agent(
-            _mailbox(settings),
-            lambda mail: classify(client, settings.model, mail, CATEGORIES, settings.user_context),
-            settings,
-            CATEGORIES,
-        )
+        agent = Agent(_mailbox(settings), classifier, settings, CATEGORIES)
         warn_if_state_recovered(agent)
         report = agent.run(apply=args.apply, limit=args.limit, since_days=args.since_days,
                            reprocess=args.reprocess)
@@ -110,6 +114,9 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour appliquer le tri.")
     if args.apply and report.outcomes:
         print(f"Passage {report.run_id} (pour l'annuler : python -m outlook_agent undo --run-id {report.run_id})")
+    if settings.json_mode == "auto" and classifier.mode != "schema":
+        print(f"Note : ce fournisseur d'IA n'accepte pas les réponses à schéma strict, l'agent est passé "
+              f"au mode « {classifier.mode} ». Pour l'utiliser d'emblée : OUTLOOK_JSON_MODE={classifier.mode} dans .env.")
     if report.aborted:
         print(f"Erreur : passage interrompu avant la fin : {report.aborted}", file=sys.stderr)
     return 1 if report.errors or report.aborted else 0

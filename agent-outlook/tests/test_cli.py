@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 import requests
 
@@ -40,6 +42,38 @@ def test_settings_left_empty_in_env_file_use_defaults(monkeypatch):
     assert settings.model == "gpt-4o-mini"
     assert settings.home.name == ".outlook_agent"
     assert settings.tenant_id == "organizations"
+
+
+def test_provider_settings_are_read_from_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.mistral.ai/v1")
+    monkeypatch.setenv("OUTLOOK_LLM_PAUSE", "2,5")
+    monkeypatch.setenv("OPENAI_MAX_RETRIES", "6")
+    monkeypatch.setenv("OUTLOOK_JSON_MODE", "JSON")
+    settings = Settings.from_env()
+    assert (settings.llm_base_url, settings.llm_pause, settings.llm_max_retries, settings.json_mode) == \
+        ("https://api.mistral.ai/v1", 2.5, 6, "json")
+
+
+@pytest.mark.parametrize("name, value", [("OUTLOOK_JSON_MODE", "xml"), ("OUTLOOK_LLM_PAUSE", "-1")])
+def test_invalid_provider_settings_are_reported(monkeypatch, name, value):
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ConfigError):
+        Settings.from_env()
+
+
+def test_client_points_to_the_configured_provider(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "clé-gratuite")
+    settings = replace(Settings.from_env(), llm_base_url="https://api.mistral.ai/v1", llm_max_retries=6)
+    client = cli._openai_client(settings)
+    assert str(client.base_url).startswith("https://api.mistral.ai/v1") and client.max_retries == 6
+
+
+def test_local_model_needs_no_api_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    local = replace(Settings.from_env(), llm_base_url="http://localhost:11434/v1")
+    assert str(cli._openai_client(local).base_url).startswith("http://localhost:11434/v1")
+    with pytest.raises(ConfigError, match="OPENAI_API_KEY"):
+        cli._openai_client(replace(local, llm_base_url="https://api.mistral.ai/v1"))
 
 
 def test_file_errors_are_reported_without_traceback(monkeypatch, capsys):

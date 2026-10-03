@@ -95,6 +95,12 @@ DEFAULT_CONTEXT = (
 )
 
 
+DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
+# Comment obtenir une réponse structurée : « auto » essaie le schéma JSON strict, puis se replie
+# sur le mode JSON simple, puis sur du texte, si le fournisseur refuse le format demandé.
+JSON_MODES = ("auto", "schema", "json", "text")
+
+
 @dataclass(frozen=True)
 class Settings:
     client_id: str
@@ -105,6 +111,11 @@ class Settings:
     body_chars: int
     min_confidence: float
     user_context: str
+    # Fournisseur d'IA : tout service compatible avec l'API OpenAI (Mistral, Gemini, Ollama local...).
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
+    llm_pause: float = 0.0        # secondes minimum entre deux appels (limites des offres gratuites)
+    llm_max_retries: int = 2      # nouvelles tentatives du SDK sur saturation ou erreur passagère
+    json_mode: str = "auto"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -113,12 +124,19 @@ class Settings:
         try:
             body_chars = int(_env("OUTLOOK_BODY_CHARS", "1200"))
             min_confidence = float(_env("OUTLOOK_MIN_CONFIDENCE", "0.6").replace(",", "."))
+            llm_pause = float(_env("OUTLOOK_LLM_PAUSE", "0").replace(",", "."))
+            llm_max_retries = int(_env("OPENAI_MAX_RETRIES", "2"))
         except ValueError as exc:
             raise ConfigError(f"Valeur numérique invalide dans l'environnement : {exc}") from exc
         if not 0.0 <= min_confidence <= 1.0:
             raise ConfigError("OUTLOOK_MIN_CONFIDENCE doit être entre 0 et 1 (par exemple 0.6).")
         if body_chars < 1:
             raise ConfigError("OUTLOOK_BODY_CHARS doit être un nombre positif.")
+        if llm_pause < 0 or llm_max_retries < 0:
+            raise ConfigError("OUTLOOK_LLM_PAUSE et OPENAI_MAX_RETRIES ne peuvent pas être négatifs.")
+        json_mode = _env("OUTLOOK_JSON_MODE", "auto").lower()
+        if json_mode not in JSON_MODES:
+            raise ConfigError(f"OUTLOOK_JSON_MODE doit valoir {', '.join(JSON_MODES)}.")
         return cls(
             client_id=_env("OUTLOOK_CLIENT_ID"),
             tenant_id=_env("OUTLOOK_TENANT_ID", "organizations"),
@@ -128,6 +146,10 @@ class Settings:
             body_chars=body_chars,
             min_confidence=min_confidence,
             user_context=_env("OUTLOOK_AGENT_CONTEXT", DEFAULT_CONTEXT),
+            llm_base_url=_env("OPENAI_BASE_URL", DEFAULT_LLM_BASE_URL),
+            llm_pause=llm_pause,
+            llm_max_retries=llm_max_retries,
+            json_mode=json_mode,
         )
 
 
