@@ -1,2 +1,7 @@
 node_modules/
 package-lock.json
+
+agent-outlook/.env
+__pycache__/
+.pytest_cache/
+.venv/
