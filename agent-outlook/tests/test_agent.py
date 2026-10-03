@@ -7,7 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 from outlook_agent.agent import (
-    Agent, Mail, RunLock, StateStore, decide, is_meeting_message, render_digest, setup_mailbox,
+    Agent, Mail, RunLock, StateStore, decide, is_meeting_message, render_digest, save_digest,
+    setup_mailbox,
 )
 from outlook_agent.auth import AuthError
 from outlook_agent.classifier import ClassifierUnavailable, Verdict, build_system_prompt, classify
@@ -53,6 +54,8 @@ class FakeMailbox:
             m["id"]: {"categories": list(m.get("categories", [])), "flag": dict(m.get("flag", {}))}
             for m in messages
         }
+        self.location = {m["id"]: "inbox" for m in messages}
+        self.folder_names = {"inbox": "Boîte de réception"}
 
     def iter_inbox_messages(self, since_days=None):
         for message in self.messages:
@@ -65,7 +68,15 @@ class FakeMailbox:
 
     def get_message(self, message_id):
         state = self.current[message_id]
-        return {"categories": list(state["categories"]), "flag": dict(state["flag"])}
+        return {"categories": list(state["categories"]), "flag": dict(state["flag"]),
+                "parentFolderId": self.location[message_id]}
+
+    def folder_name(self, folder_id):
+        if folder_id in self.folder_names:
+            return self.folder_names[folder_id]
+        if folder_id.startswith("id:"):
+            return folder_id[3:]
+        return next(name for name, fid in self.folders.items() if fid == folder_id)
 
     def child_folders(self):
         return dict(self.folders)
@@ -84,6 +95,7 @@ class FakeMailbox:
 
     def move_message(self, message_id, destination):
         self.writes.append(("move", message_id, destination))
+        self.location[message_id] = destination
 
     def master_categories(self):
         return set()
@@ -344,6 +356,28 @@ def test_failed_move_keeps_track_of_agent_labels_for_the_retry(tmp_path):
     assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
 
 
+def test_a_mail_that_keeps_failing_is_abandoned_after_three_tries(tmp_path):
+    agent, _ = make_agent(tmp_path, [raw_mail("1")], [RuntimeError("refusé par le filtre")] * 4)
+    agent.run(apply=False, limit=10)  # une simulation ne compte pas
+    assert "abandonné" not in agent.run(apply=True, limit=10).errors[0].error
+    assert "abandonné" not in agent.run(apply=True, limit=10).errors[0].error
+    assert "abandonné" in agent.run(apply=True, limit=10).errors[0].error
+    assert agent.run(apply=True, limit=10).skipped_seen == 1
+
+
+def test_state_is_written_after_each_mail(tmp_path):
+    agent, _ = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [])
+    answers = iter([verdict(), verdict()])
+
+    def classify_and_check(mail):
+        if mail.id == "2":  # le premier mail est déjà sur le disque
+            assert StateStore(tmp_path / "state.json").seen("1")
+        return next(answers)
+
+    agent.classify = classify_and_check
+    agent.run(apply=True, limit=10)
+
+
 def test_state_never_forgets_mails_left_in_the_inbox(tmp_path, monkeypatch):
     monkeypatch.setattr(StateStore, "MAX_MOVED_ENTRIES", 1)
     state = StateStore(tmp_path / "state.json")
@@ -373,6 +407,12 @@ def test_run_lock_prevents_two_runs_and_recovers_from_a_stale_lock(tmp_path):
     os.utime(tmp_path / "agent.lock", (old, old))
     with RunLock(tmp_path):  # verrou abandonné par un passage arrêté brutalement
         pass
+
+
+def test_run_lock_does_not_remove_a_lock_taken_over_by_another_run(tmp_path):
+    with RunLock(tmp_path):
+        (tmp_path / "agent.lock").write_text("verrou d'un autre passage")
+    assert (tmp_path / "agent.lock").read_text() == "verrou d'un autre passage"
 
 
 def test_state_from_an_older_format_is_still_read(tmp_path):
@@ -439,6 +479,46 @@ def test_undo_of_an_already_undone_run_does_nothing(tmp_path):
     mailbox.writes.clear()
     assert agent.undo(apply=True, run_id=run_id) == []
     assert mailbox.writes == []
+
+
+def test_undo_leaves_a_mail_the_user_moved_or_deleted_since(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict("newsletters")])
+    agent.run(apply=True, limit=10)
+    mailbox.location["1"] = "corbeille-id"
+    mailbox.folder_names["corbeille-id"] = "Éléments supprimés"
+    mailbox.writes.clear()
+
+    items = agent.undo(apply=True)
+    assert items[0].restored and "Éléments supprimés" in items[0].note
+    assert mailbox.writes == [("update", "1", [], None)]  # catégories retirées, pas de déplacement
+    assert mailbox.location["1"] == "corbeille-id"
+
+
+def test_retrying_an_interrupted_undo_does_not_replay_restored_mails(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [verdict(), verdict()])
+    agent.run(apply=True, limit=10)
+    original_move = mailbox.move_message
+
+    def move_failing_for_2(message_id, destination):
+        if message_id == "2":
+            raise RuntimeError("Graph indisponible")
+        original_move(message_id, destination)
+
+    mailbox.move_message = move_failing_for_2
+    first = {item.entry["id"]: item for item in agent.undo(apply=True)}
+    assert first["1"].restored and first["2"].error
+
+    # Entre-temps, l'utilisateur reclasse lui-même le mail 1.
+    mailbox.current["1"]["categories"] = ["Chantier"]
+    mailbox.location["1"] = "id:Chantier en cours"
+    mailbox.move_message = original_move
+    mailbox.writes.clear()
+
+    second = {item.entry["id"]: item for item in agent.undo(apply=True)}
+    assert second["1"].restored and "déjà remis" in second["1"].note
+    assert second["2"].restored
+    assert all(write[1] == "2" for write in mailbox.writes)
+    assert mailbox.current["1"]["categories"] == ["Chantier"]
 
 
 def test_partially_failed_undo_stays_the_default_target(tmp_path):
@@ -534,6 +614,24 @@ def test_digest_keeps_an_urgent_mail_visible_when_its_move_failed(tmp_path):
     urgent_section = digest.split("## Urgents")[1]
     assert "Échafaudage" in urgent_section and "NON RANGÉ" in urgent_section
     assert digest.count("Échafaudage") == 1
+
+
+def test_digest_files_are_not_overwritten_by_empty_runs(tmp_path):
+    to_do = verdict(action_required=True)  # cité par son objet dans « Actions à mener »
+    agent, _ = make_agent(tmp_path, [raw_mail("1", "Coffrage")], [to_do, to_do])
+
+    simulation = agent.run(apply=False, limit=10)
+    assert save_digest(tmp_path, simulation, render_digest(simulation)) == tmp_path / "simulation.md"
+    assert not (tmp_path / "dernier_resume.md").exists()
+
+    applied = agent.run(apply=True, limit=10)
+    assert save_digest(tmp_path, applied, render_digest(applied)) == tmp_path / "dernier_resume.md"
+    empty = agent.run(apply=True, limit=10)  # 15 minutes plus tard, rien de nouveau
+    assert save_digest(tmp_path, empty, render_digest(empty)) is None
+
+    assert "Coffrage" in (tmp_path / "dernier_resume.md").read_text(encoding="utf-8")
+    [day_file] = (tmp_path / "resumes").iterdir()
+    assert "Coffrage" in day_file.read_text(encoding="utf-8")
 
 
 def test_system_prompt_mentions_every_category():

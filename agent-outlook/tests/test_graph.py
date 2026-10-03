@@ -2,6 +2,7 @@ import pytest
 import requests
 
 from outlook_agent import graph
+from outlook_agent.config import FatalError
 from outlook_agent.graph import GraphClient, GraphError
 
 
@@ -99,10 +100,31 @@ def test_child_folders_maps_lowercase_names_to_ids():
     assert client.child_folders() == {"à traiter urgent": "9"}
 
 
-def test_get_message_reads_only_categories_and_flag():
+def test_get_message_reads_only_categories_flag_and_folder():
     client, session = make_client([FakeResponse(payload={"categories": ["A"], "flag": {}})])
     assert client.get_message("1")["categories"] == ["A"]
-    assert session.calls[0]["params"] == {"$select": "categories,flag"}
+    assert session.calls[0]["params"] == {"$select": "categories,flag,parentFolderId"}
+
+
+def test_folder_name():
+    client, session = make_client([FakeResponse(payload={"displayName": "Éléments supprimés"})])
+    assert client.folder_name("AB/C=") == "Éléments supprimés"
+    assert session.calls[0]["url"].endswith("/me/mailFolders/AB%2FC%3D")
+
+
+def test_network_error_while_renewing_the_token_is_retried():
+    attempts = []
+
+    def token():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise requests.ConnectionError("login.microsoftonline.com injoignable")
+        return "jeton"
+
+    client = GraphClient(token)
+    client._session = FakeSession([FakeResponse(payload={"id": "ok"})])
+    assert client.create_folder("Test") == "ok"
+    assert len(attempts) == 2
 
 
 def test_retries_on_throttling_then_succeeds(sleeps):
@@ -129,17 +151,25 @@ def test_retries_server_and_network_errors(failure):
 
 def test_gives_up_after_too_many_attempts_without_a_useless_last_wait(sleeps):
     client, session = make_client([FakeResponse(503, payload={})] * graph.MAX_ATTEMPTS)
-    with pytest.raises(GraphError, match="trop de tentatives"):
+    with pytest.raises(FatalError, match="injoignable"):  # panne : inutile d'insister mail par mail
         client.create_folder("Test")
     assert len(session.calls) == graph.MAX_ATTEMPTS
     assert len(sleeps) == graph.MAX_ATTEMPTS - 1
 
 
-def test_error_status_raises_with_details():
-    client, _ = make_client([FakeResponse(403, payload={"error": "Forbidden"})])
-    with pytest.raises(GraphError, match="403") as error:
+@pytest.mark.parametrize("status", [401, 403])
+def test_missing_permission_stops_the_run(status):
+    client, _ = make_client([FakeResponse(status, payload={"error": "Forbidden"})])
+    with pytest.raises(FatalError, match=str(status)) as error:
         client.master_categories()
-    assert error.value.status == 403
+    assert isinstance(error.value, GraphError) and error.value.status == status
+
+
+def test_error_specific_to_one_mail_is_not_fatal():
+    client, _ = make_client([FakeResponse(404, payload={"error": "ErrorItemNotFound"})])
+    with pytest.raises(GraphError) as error:
+        client.get_body("supprimé")
+    assert not isinstance(error.value, FatalError) and error.value.status == 404
 
 
 def test_create_folder_that_already_exists_returns_the_existing_one():

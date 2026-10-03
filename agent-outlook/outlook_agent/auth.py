@@ -1,11 +1,10 @@
 """Connexion à Microsoft 365 (flux « code d'appareil ») avec jeton conservé localement."""
 from __future__ import annotations
 
-import os
-
 import msal
 
 from .config import ConfigError, FatalError, Settings
+from .files import write_atomic
 
 
 class AuthError(FatalError):
@@ -20,7 +19,11 @@ class TokenProvider:
         self._scopes = list(settings.scopes)
         self._cache = msal.SerializableTokenCache()
         if self._path.exists():
-            self._cache.deserialize(self._path.read_text(encoding="utf-8"))
+            try:
+                self._cache.deserialize(self._path.read_text(encoding="utf-8"))
+            except Exception:
+                # Fichier abîmé : on repart d'un cache vide, il suffira de relancer `login`.
+                self._cache = msal.SerializableTokenCache()
         self._app = msal.PublicClientApplication(
             settings.client_id,
             authority=f"https://login.microsoftonline.com/{settings.tenant_id}",
@@ -52,6 +55,4 @@ class TokenProvider:
         if not self._cache.has_state_changed:
             return
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        fd = os.open(self._path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(self._cache.serialize())
+        write_atomic(self._path, self._cache.serialize(), private=True)

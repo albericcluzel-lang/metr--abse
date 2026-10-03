@@ -23,7 +23,8 @@ Règles complémentaires :
 - Un mail où une action est attendue de votre part reçoit en plus la catégorie « Action requise ».
 - **Dans le doute, l'agent ne range pas** : sous le seuil de confiance (0,6 par défaut) le mail reste dans la boîte de réception avec la catégorie « À vérifier ».
 - Les invitations et réponses de réunion ne sont pas touchées.
-- Un mail déjà traité n'est jamais analysé deux fois.
+- Un mail déjà traité n'est jamais analysé deux fois. Un mail qui échoue 3 fois de suite (illisible, refusé par l'IA) est laissé tel quel.
+- L'agent ne retire jamais une catégorie que vous avez posée vous-même.
 
 ## Mise en place
 
@@ -74,13 +75,15 @@ python -m outlook_agent setup            # crée les dossiers dans Outlook (et l
 python -m outlook_agent run --limit 20   # SIMULATION sur les 20 derniers mails
 ```
 
-Lisez le résultat : pour chaque mail, le dossier prévu, puis un résumé (urgents, actions à mener, répartition). Le résumé est aussi enregistré dans `dernier_resume.md`. Si le classement vous convient :
+Lisez le résultat : pour chaque mail, le dossier prévu, puis un résumé (urgents, actions à mener, répartition). Si le classement vous convient :
 
 ```
 python -m outlook_agent run --apply
 ```
 
-Si quelque chose ne va pas, **annulez le dernier passage**. Les mails reviennent dans la boîte de réception, et l'agent retire les catégories et le drapeau qu'il avait posés, sans toucher à ceux que vous avez ajoutés depuis :
+Les résumés sont enregistrés dans `~/.outlook_agent/` : `dernier_resume.md` pour le dernier passage qui a traité des mails, `resumes/AAAA-MM-JJ.md` pour l'historique de la journée, `simulation.md` pour la dernière simulation. Un passage sans nouveau mail n'écrase rien.
+
+Si quelque chose ne va pas, **annulez le dernier passage**. Les mails reviennent dans la boîte de réception, et l'agent retire les catégories et le drapeau qu'il avait posés, sans toucher à ceux que vous avez ajoutés depuis. Un mail que vous avez déplacé ou supprimé entre-temps reste où il est :
 
 ```
 python -m outlook_agent undo            # simulation
@@ -103,7 +106,7 @@ Mac/Linux (cron) :
 */15 * * * * cd ~/agent-outlook && .venv/bin/python -m outlook_agent run --apply --since-days 2
 ```
 
-Une tâche planifiée ne se reconnecte jamais seule : si Microsoft demande une nouvelle connexion (jeton expiré, politique de sécurité), elle s'arrête avec un message ; relancez `login`.
+Une tâche planifiée ne se reconnecte jamais seule : si Microsoft demande une nouvelle connexion (jeton expiré, politique de sécurité), elle s'arrête avec un message ; relancez `login`. De même, si la clé OpenAI est refusée, le crédit épuisé ou le réseau coupé, le passage s'arrête dès la première erreur, avec un message clair. Deux passages ne peuvent pas tourner en même temps : si la tâche planifiée tourne déjà, un lancement manuel l'indique et s'arrête.
 
 ## Personnaliser
 

@@ -42,10 +42,14 @@ def test_errors_affecting_every_mail_become_fatal(error, message):
         classify(raising(error), "modèle", MAIL, CATEGORIES, "ctx")
 
 
-def test_ordinary_rate_limit_stays_an_error_for_this_mail_only():
-    error = sdk_error(openai.RateLimitError, code="rate_limit_exceeded")
-    with pytest.raises(openai.RateLimitError):
+@pytest.mark.parametrize("error", [
+    sdk_error(openai.RateLimitError, code="rate_limit_exceeded"),
+    sdk_error(openai.APITimeoutError),  # sous-classe d'APIConnectionError : une requête lente
+])
+def test_temporary_errors_stay_errors_for_this_mail_only(error):
+    with pytest.raises(type(error)) as raised:
         classify(raising(error), "modèle", MAIL, CATEGORIES, "ctx")
+    assert not isinstance(raised.value, ClassifierUnavailable)
 
 
 def test_response_schema_follows_the_given_categories():

@@ -8,6 +8,8 @@ from urllib.parse import quote
 
 import requests
 
+from .config import FatalError
+
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 # Sans le corps : il n'est téléchargé que pour les mails à analyser (get_body).
 LIST_FIELDS = "id,subject,from,receivedDateTime,hasAttachments,importance,categories,flag"
@@ -28,6 +30,13 @@ class GraphError(RuntimeError):
         self.status = status
 
 
+class GraphUnavailable(GraphError, FatalError):
+    """Microsoft Graph injoignable ou permission refusée : toucherait tous les mails."""
+
+
+FATAL_STATUS = (401, 403)
+
+
 def _retry_delay(response: requests.Response, attempt: int) -> float:
     try:
         return min(float(response.headers["Retry-After"]), 60.0)
@@ -45,8 +54,9 @@ class GraphClient:
         for attempt in range(MAX_ATTEMPTS):
             if attempt:
                 time.sleep(delay)
-            headers = {"Authorization": f"Bearer {self._token()}", "Prefer": prefer}
             try:
+                # Dans le try : renouveler le jeton passe aussi par le réseau.
+                headers = {"Authorization": f"Bearer {self._token()}", "Prefer": prefer}
                 response = self._session.request(
                     method, url, params=params, json=json, headers=headers, timeout=60
                 )
@@ -57,11 +67,12 @@ class GraphClient:
                 delay, last_error = _retry_delay(response, attempt), f"statut {response.status_code}"
                 continue
             if not response.ok:
-                raise GraphError(
+                error = GraphUnavailable if response.status_code in FATAL_STATUS else GraphError
+                raise error(
                     f"{method} {url} -> {response.status_code} {response.text[:300]}", response.status_code
                 )
             return response.json() if response.content else {}
-        raise GraphError(f"{method} {url} : trop de tentatives ({last_error})")
+        raise GraphUnavailable(f"Microsoft Graph injoignable : {method} {url} ({last_error})")
 
     def _pages(self, url: str, params: dict | None = None) -> Iterator[dict]:
         """Éléments d'une liste Graph, page par page, téléchargés au fur et à mesure."""
@@ -89,11 +100,18 @@ class GraphClient:
         return (data.get("body") or {}).get("content") or ""
 
     def get_message(self, message_id: str) -> dict:
-        """Catégories et drapeau actuels d'un mail."""
+        """Catégories, drapeau et dossier actuels d'un mail."""
         return self._request(
             "GET", f"{GRAPH_URL}/me/messages/{quote(message_id, safe='')}",
-            params={"$select": "categories,flag"},
+            params={"$select": "categories,flag,parentFolderId"},
         )
+
+    def folder_name(self, folder_id: str) -> str:
+        data = self._request(
+            "GET", f"{GRAPH_URL}/me/mailFolders/{quote(folder_id, safe='')}",
+            params={"$select": "displayName"},
+        )
+        return data.get("displayName") or ""
 
     def update_message(self, message_id: str, categories: list[str] | None = None,
                        flag_status: str | None = None) -> None:

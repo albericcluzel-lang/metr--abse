@@ -95,6 +95,8 @@ def classify(client, model: str, mail: "Mail", categories: tuple[Category, ...],
         ) from exc
     except openai.NotFoundError as exc:
         raise ClassifierUnavailable(f"Modèle OpenAI « {model} » introuvable : changez OPENAI_MODEL dans .env.") from exc
+    except openai.APITimeoutError:
+        raise  # une requête trop lente : erreur pour ce mail seulement
     except openai.APIConnectionError as exc:
         raise ClassifierUnavailable("Connexion à OpenAI impossible (réseau ou pare-feu).") from exc
     except openai.RateLimitError as exc:

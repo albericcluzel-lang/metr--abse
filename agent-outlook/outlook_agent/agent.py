@@ -16,6 +16,7 @@ from .classifier import Verdict
 from .config import (
     ACTION_LABEL, EXTRA_LABELS, REVIEW_LABEL, URGENT_FOLDER, URGENT_LABEL, Category, FatalError, Settings,
 )
+from .files import write_atomic
 
 
 class Mailbox(Protocol):
@@ -24,6 +25,7 @@ class Mailbox(Protocol):
     def iter_inbox_messages(self, since_days: int | None = None) -> Iterator[dict]: ...
     def get_body(self, message_id: str) -> str: ...
     def get_message(self, message_id: str) -> dict: ...
+    def folder_name(self, folder_id: str) -> str: ...
     def update_message(self, message_id: str, categories: list[str] | None = None,
                        flag_status: str | None = None) -> None: ...
     def move_message(self, message_id: str, destination: str) -> None: ...
@@ -137,14 +139,6 @@ class RunReport:
         return [outcome for outcome in self.outcomes if outcome.error]
 
 
-def _write_atomic(path: Path, text: str) -> None:
-    """Écrit d'abord un fichier temporaire : un arrêt brutal ne laisse jamais un fichier à moitié écrit."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(text, encoding="utf-8")
-    os.replace(temporary, path)
-
-
 class RunLock:
     """Empêche deux passages simultanés (tâche planifiée et lancement manuel, par exemple)."""
 
@@ -152,6 +146,7 @@ class RunLock:
 
     def __init__(self, home: Path):
         self._path = home / "agent.lock"
+        self._token = uuid.uuid4().hex
 
     def __enter__(self) -> "RunLock":
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,12 +166,17 @@ class RunLock:
                 self._path.unlink(missing_ok=True)
                 continue
             with os.fdopen(fd, "w") as handle:
-                handle.write(str(os.getpid()))
+                handle.write(self._token)
             return self
         raise FatalError(f"Impossible de prendre le verrou {self._path}.")
 
     def __exit__(self, *exc_info) -> None:
-        self._path.unlink(missing_ok=True)
+        # Ne retire que son propre verrou : s'il a été repris (jugé abandonné), il est à un autre.
+        try:
+            if self._path.read_text() == self._token:
+                self._path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 class StateStore:
@@ -189,6 +189,9 @@ class StateStore:
     # Seuls les mails rangés hors de la boîte de réception sont oubliés au-delà de ce nombre :
     # ceux qui y sont restés ne doivent jamais être ré-analysés.
     MAX_MOVED_ENTRIES = 5000
+    # Un mail qui échoue autant de fois de suite est laissé tel quel, pour ne pas le renvoyer
+    # à l'IA indéfiniment.
+    MAX_FAILURES = 3
 
     def __init__(self, path: Path):
         self._path = path
@@ -220,6 +223,19 @@ class StateStore:
             "labels": labels, "done": done, "moved": moved,
         }
 
+    def record_failure(self, mail_id: str) -> bool:
+        """Compte un échec. Renvoie True si le mail est désormais abandonné (laissé tel quel)."""
+        entry = self._entries.get(mail_id)
+        failures = int((entry or {}).get("failures", 0)) + 1
+        give_up = failures >= self.MAX_FAILURES
+        self._entries[mail_id] = {
+            **(entry or {"labels": [], "moved": False}),
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "failures": failures,
+            "done": give_up or self.seen(mail_id),
+        }
+        return give_up
+
     def save(self) -> None:
         moved = sorted(
             (item for item in self._entries.items() if item[1].get("moved")),
@@ -227,7 +243,7 @@ class StateStore:
         )
         forgotten = {mail_id for mail_id, _ in moved[:-self.MAX_MOVED_ENTRIES]}
         kept = {mail_id: entry for mail_id, entry in self._entries.items() if mail_id not in forgotten}
-        _write_atomic(self._path, json.dumps({"processed": kept}, ensure_ascii=False))
+        write_atomic(self._path, json.dumps({"processed": kept}, ensure_ascii=False))
 
 
 class ActionLog:
@@ -245,6 +261,13 @@ class ActionLog:
 
     def mark_undone(self, run_id: str) -> None:
         self.append({"undone": run_id, "time": datetime.now().isoformat(timespec="seconds")})
+
+    def mark_item_undone(self, run_id: str, mail_id: str) -> None:
+        self.append({"undone_item": run_id, "id": mail_id, "time": datetime.now().isoformat(timespec="seconds")})
+
+    def undone_items(self) -> set[tuple[str, str]]:
+        return {(entry["undone_item"], entry["id"]) for entry in self._lines()
+                if "undone_item" in entry and "id" in entry}
 
     def _lines(self) -> Iterator[dict]:
         """Lignes valides du journal ; une ligne tronquée (arrêt brutal) est ignorée."""
@@ -270,6 +293,7 @@ class UndoItem:
     entry: dict
     restored: bool = False
     error: str | None = None
+    note: str = ""
 
 
 class Agent:
@@ -305,6 +329,8 @@ class Agent:
         try:
             for raw in pending:
                 report.outcomes.append(self._process(raw, apply, folders, report.run_id))
+                if apply:
+                    self.state.save()  # après chaque mail : même un arrêt brutal ne perd rien
         finally:
             if apply:
                 self.state.save()
@@ -318,13 +344,13 @@ class Agent:
         except FatalError:
             raise
         except Exception as exc:
-            return Outcome(Mail.from_graph(raw, "", 0), None, error=f"lecture : {exc}")
+            return self._failed(Outcome(Mail.from_graph(raw, "", 0), None, error=f"lecture : {exc}"), apply)
         try:
             decision = decide(self.classify(mail), self.categories, self.settings.min_confidence)
         except FatalError:
             raise
         except Exception as exc:
-            return Outcome(mail, None, error=f"classement : {exc}")
+            return self._failed(Outcome(mail, None, error=f"classement : {exc}"), apply)
 
         outcome = Outcome(mail, decision)
         if apply:
@@ -335,6 +361,12 @@ class Agent:
                 raise
             except Exception as exc:
                 outcome.error = f"application : {exc}"
+                self._failed(outcome, apply)
+        return outcome
+
+    def _failed(self, outcome: Outcome, apply: bool) -> Outcome:
+        if apply and self.state.record_failure(outcome.mail.id):
+            outcome.error += f" (abandonné après {StateStore.MAX_FAILURES} échecs : mail laissé tel quel)"
         return outcome
 
     def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> None:
@@ -376,9 +408,10 @@ class Agent:
         """Remet les mails d'un passage dans la boîte de réception et retire ce que l'agent a posé.
 
         Seuls les changements de l'agent sont défaits : une catégorie ou un drapeau ajoutés
-        ensuite par l'utilisateur sont conservés. Sans `run_id`, annule le dernier passage
-        qui ne l'a pas déjà été. Un passage déjà annulé n'est jamais rejoué, et un mail modifié
-        par un passage plus récent n'est pas touché tant que ce passage n'est pas annulé.
+        ensuite par l'utilisateur sont conservés, et un mail qu'il a déplacé ou supprimé depuis
+        reste où il est. Sans `run_id`, annule le dernier passage qui ne l'a pas déjà été.
+        Rien n'est rejoué : ni un passage déjà annulé, ni un mail déjà remis lors d'une annulation
+        interrompue ; un mail modifié par un passage plus récent attend que celui-ci soit annulé.
         """
         entries = self.log.entries()
         undone = self.log.undone_runs()
@@ -393,14 +426,17 @@ class Agent:
         later_runs = set(active[active.index(run_id) + 1:])
         touched_later = {entry["id"] for entry in entries if entry["run_id"] in later_runs}
         items = [UndoItem(entry) for entry in entries if entry["run_id"] == run_id]
+        already_restored = self.log.undone_items()
         for item in items:
-            if item.entry["id"] in touched_later:
+            if (run_id, item.entry["id"]) in already_restored:
+                item.restored, item.note = True, "déjà remis lors d'une annulation précédente"
+            elif item.entry["id"] in touched_later:
                 item.error = "modifié par un passage plus récent : annulez d'abord celui-ci"
         if not apply:
             return items
 
         for item in items:
-            if item.error:
+            if item.error or item.restored:
                 continue
             entry = item.entry
             try:
@@ -411,8 +447,14 @@ class Agent:
                 flag_status = "notFlagged" if entry["flag_set"] and current_flag == "flagged" else None
                 self.mailbox.update_message(entry["id"], categories=categories, flag_status=flag_status)
                 if entry["moved_to"]:
-                    self.mailbox.move_message(entry["id"], "inbox")
+                    parent = current.get("parentFolderId")
+                    where = self.mailbox.folder_name(parent) if parent else ""
+                    if where.casefold() == entry["moved_to"].casefold():
+                        self.mailbox.move_message(entry["id"], "inbox")
+                    else:
+                        item.note = f"laissé dans « {where or 'dossier inconnu'} », où il a été déplacé depuis"
                 self.state.mark(entry["id"], list(entry.get("owned_before") or []))
+                self.log.mark_item_undone(run_id, entry["id"])
                 item.restored = True
             except FatalError:
                 self.state.save()
@@ -456,6 +498,25 @@ def setup_mailbox(mailbox: Mailbox, categories: tuple[Category, ...]) -> list[st
         except Exception as exc:
             messages.append(f"Catégorie non créée : {label} ({exc})")
     return messages
+
+
+def save_digest(home: Path, report: RunReport, digest: str) -> Path | None:
+    """Garde le résumé : dernier passage utile + historique du jour, ou dernière simulation.
+
+    Un passage sans aucun mail analysé n'écrase rien : avec une tâche toutes les 15 minutes,
+    le résumé des urgents resterait sinon visible un quart d'heure seulement.
+    """
+    if not report.outcomes:
+        return None
+    if not report.apply:
+        write_atomic(home / "simulation.md", digest)
+        return home / "simulation.md"
+    write_atomic(home / "dernier_resume.md", digest)
+    day = home / "resumes" / f"{datetime.now():%Y-%m-%d}.md"
+    day.parent.mkdir(parents=True, exist_ok=True)
+    with day.open("a", encoding="utf-8") as handle:
+        handle.write(digest + "\n")
+    return home / "dernier_resume.md"
 
 
 def render_digest(report: RunReport) -> str:

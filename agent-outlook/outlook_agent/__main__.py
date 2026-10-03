@@ -8,7 +8,7 @@ import sys
 
 import requests
 
-from .agent import Agent, Outcome, RunLock, render_digest, setup_mailbox
+from .agent import Agent, Outcome, RunLock, render_digest, save_digest, setup_mailbox
 from .auth import TokenProvider
 from .classifier import classify
 from .config import CATEGORIES, ConfigError, FatalError, Settings
@@ -99,10 +99,11 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
     for outcome in report.outcomes:
         print(describe(outcome))
     digest = render_digest(report)
-    settings.home.mkdir(parents=True, exist_ok=True)
-    (settings.home / "dernier_resume.md").write_text(digest, encoding="utf-8")
+    saved = save_digest(settings.home, report, digest)
     print()
     print(digest)
+    if saved:
+        print(f"Résumé enregistré dans {saved}")
     if not args.apply:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour appliquer le tri.")
     if args.apply and report.outcomes:
@@ -120,7 +121,8 @@ def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
     for item in items:
         status = "remis" if item.restored else (f"NON ANNULÉ : {item.error}" if item.error else "à remettre")
         print(f"[{status}] {item.entry.get('subject', '(sans objet)')} "
-              f"(était rangé dans : {item.entry['moved_to'] or 'boîte de réception'})")
+              f"(était rangé dans : {item.entry['moved_to'] or 'boîte de réception'})"
+              + (f" : {item.note}" if item.note else ""))
     if not args.apply:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour annuler réellement.")
     return 1 if any(item.error for item in items) else 0
