@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -95,6 +96,13 @@ DEFAULT_CONTEXT = (
 )
 
 
+DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1"
+LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
+# Comment obtenir une réponse structurée : « auto » essaie le schéma JSON strict, puis se replie
+# sur le mode JSON simple, puis sur du texte, si le fournisseur refuse le format demandé.
+JSON_MODES = ("auto", "schema", "json", "text")
+
+
 @dataclass(frozen=True)
 class Settings:
     client_id: str
@@ -105,6 +113,20 @@ class Settings:
     body_chars: int
     min_confidence: float
     user_context: str
+    # Fournisseur d'IA : tout service compatible avec l'API OpenAI (Mistral, Gemini, Ollama local...).
+    llm_base_url: str = DEFAULT_LLM_BASE_URL
+    llm_pause: float = 0.0        # secondes minimum entre deux appels (limites des offres gratuites)
+    llm_max_retries: int = 2      # nouvelles tentatives du SDK sur saturation ou erreur passagère
+    json_mode: str = "auto"
+    # Paramètres envoyés au modèle seulement s'ils sont définis (chaque fournisseur a ses valeurs).
+    llm_temperature: float | None = None
+    llm_max_tokens: int | None = None
+    llm_reasoning_effort: str | None = None
+
+    @property
+    def llm_is_local(self) -> bool:
+        """Modèle qui tourne sur ce PC (Ollama, LM Studio) : rien ne sort de la machine."""
+        return is_local_url(self.llm_base_url)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -113,12 +135,27 @@ class Settings:
         try:
             body_chars = int(_env("OUTLOOK_BODY_CHARS", "1200"))
             min_confidence = float(_env("OUTLOOK_MIN_CONFIDENCE", "0.6").replace(",", "."))
+            llm_pause = float(_env("OUTLOOK_LLM_PAUSE", "0").replace(",", "."))
+            llm_max_retries = int(_env("OPENAI_MAX_RETRIES", "2"))
+            base_url = _env("OPENAI_BASE_URL", DEFAULT_LLM_BASE_URL)
+            local = is_local_url(base_url)
+            # En local, Ollama répond au hasard sans température 0 et un petit modèle peut boucler
+            # sans limite de longueur : valeurs sûres par défaut. Ailleurs, défaut du fournisseur.
+            llm_temperature = _optional(_env("OUTLOOK_LLM_TEMPERATURE", "0" if local else "none"), float)
+            llm_max_tokens = _optional(_env("OUTLOOK_LLM_MAX_TOKENS", "512" if local else "none"), int)
         except ValueError as exc:
             raise ConfigError(f"Valeur numérique invalide dans l'environnement : {exc}") from exc
         if not 0.0 <= min_confidence <= 1.0:
             raise ConfigError("OUTLOOK_MIN_CONFIDENCE doit être entre 0 et 1 (par exemple 0.6).")
         if body_chars < 1:
             raise ConfigError("OUTLOOK_BODY_CHARS doit être un nombre positif.")
+        if llm_pause < 0 or llm_max_retries < 0:
+            raise ConfigError("OUTLOOK_LLM_PAUSE et OPENAI_MAX_RETRIES ne peuvent pas être négatifs.")
+        if llm_max_tokens is not None and llm_max_tokens < 1:
+            raise ConfigError("OUTLOOK_LLM_MAX_TOKENS doit être un nombre positif (ou « none »).")
+        json_mode = _env("OUTLOOK_JSON_MODE", "auto").lower()
+        if json_mode not in JSON_MODES:
+            raise ConfigError(f"OUTLOOK_JSON_MODE doit valoir {', '.join(JSON_MODES)}.")
         return cls(
             client_id=_env("OUTLOOK_CLIENT_ID"),
             tenant_id=_env("OUTLOOK_TENANT_ID", "organizations"),
@@ -128,9 +165,29 @@ class Settings:
             body_chars=body_chars,
             min_confidence=min_confidence,
             user_context=_env("OUTLOOK_AGENT_CONTEXT", DEFAULT_CONTEXT),
+            llm_base_url=base_url,
+            llm_pause=llm_pause,
+            llm_max_retries=llm_max_retries,
+            json_mode=json_mode,
+            llm_temperature=llm_temperature,
+            llm_max_tokens=llm_max_tokens,
+            # Transmis tel quel, « none » compris (valeur réelle chez Mistral, OpenAI, Ollama) ;
+            # vide ou absent : non envoyé.
+            llm_reasoning_effort=_env("OUTLOOK_LLM_REASONING_EFFORT") or None,
         )
+
+
+def is_local_url(url: str) -> bool:
+    return urlparse(url).hostname in LOCAL_HOSTS
 
 
 def _env(name: str, default: str = "") -> str:
     """Variable d'environnement ; une valeur laissée vide dans .env compte comme absente."""
     return os.environ.get(name, "").strip() or default
+
+
+def _optional(value: str, convert):
+    """« none » (ou « aucun ») : paramètre non envoyé au modèle."""
+    if value.lower() in ("none", "aucun"):
+        return None
+    return convert(value.replace(",", ".") if convert is float else value)

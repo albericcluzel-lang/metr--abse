@@ -1,16 +1,17 @@
-"""Ligne de commande : python -m outlook_agent {login,setup,run,undo}."""
+"""Ligne de commande : python -m outlook_agent {test-ia,login,setup,run,undo}."""
 from __future__ import annotations
 
 import argparse
 import dataclasses
 import os
 import sys
+import time
 
 import requests
 
-from .agent import Agent, Outcome, RunLock, render_digest, save_digest, setup_mailbox
+from .agent import Agent, Mail, Outcome, RunLock, render_digest, save_digest, setup_mailbox
 from .auth import TokenProvider
-from .classifier import classify
+from .classifier import Classifier
 from .config import CATEGORIES, ConfigError, FatalError, Settings
 from .graph import GraphClient, GraphError
 
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="outlook_agent", description="Agent de tri de la boîte Outlook.")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    commands.add_parser("test-ia", help="vérifier le fournisseur d'IA avec un mail fictif (sans Outlook)")
     commands.add_parser("login", help="se connecter à Microsoft 365 (une seule fois)")
     commands.add_parser("setup", help="créer les dossiers et catégories dans Outlook")
 
@@ -49,12 +51,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _openai_client():
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise ConfigError("OPENAI_API_KEY manquante : voir le README, étape 1.")
-    from openai import OpenAI
+def _openai_client(settings: Settings):
+    """Client du fournisseur d'IA : OpenAI par défaut, ou tout service compatible (OPENAI_BASE_URL)."""
+    key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not key and settings.llm_is_local:
+        key = "local"  # un modèle local (Ollama, LM Studio) n'a pas besoin de vraie clé
+    if not key:
+        raise ConfigError("OPENAI_API_KEY manquante : clé du fournisseur d'IA, voir le README, étape 1.")
+    import openai
 
-    return OpenAI()
+    extra = {}
+    if settings.llm_is_local:
+        # Jamais de proxy vers un modèle local : sinon le contenu des mails partirait vers le proxy
+        # de l'entreprise (variables HTTP_PROXY ou proxy système de Windows).
+        extra["http_client"] = openai.DefaultHttpxClient(trust_env=False)
+    return openai.OpenAI(api_key=key, base_url=settings.llm_base_url, max_retries=settings.llm_max_retries, **extra)
+
+
+def _request_options(settings: Settings) -> dict:
+    """Paramètres du modèle définis dans .env (rien n'est envoyé pour ceux laissés vides)."""
+    options = {"temperature": settings.llm_temperature, "max_tokens": settings.llm_max_tokens,
+               "reasoning_effort": settings.llm_reasoning_effort}
+    return {name: value for name, value in options.items() if value is not None}
 
 
 def _mailbox(settings: Settings) -> GraphClient:
@@ -68,6 +86,41 @@ def describe(outcome: Outcome) -> str:
     tags = ("[URGENT] " if decision.urgent else "") + ("[ACTION] " if decision.action_required else "")
     where = decision.folder or "reste en boîte de réception"
     return f"{tags}{outcome.mail.subject} ({outcome.mail.sender or outcome.mail.address}) -> {where}"
+
+
+# Mail inventé : le test ne lit ni n'envoie aucun vrai mail.
+SAMPLE_MAIL = Mail(
+    id="test", subject="Facture n°2026-118 - lot plâtrerie, chantier résidence Les Arceaux",
+    sender="Service comptabilité (exemple)", address="compta@exemple.fr", received="",
+    body="Bonjour, veuillez trouver ci-joint notre facture n°2026-118 pour la situation n°3 du lot "
+         "plâtrerie. Échéance de paiement au 15 du mois prochain. Merci de nous confirmer sa bonne "
+         "réception et la date de règlement prévue. Cordialement.",
+    has_attachments=True, importance="normal",
+)
+
+
+def cmd_test_ia(settings: Settings, args: argparse.Namespace) -> int:
+    """Vérifie clé, modèle et format de réponse du fournisseur d'IA, sans toucher à Outlook."""
+    classifier = Classifier(_openai_client(settings), settings.model, CATEGORIES, settings.user_context,
+                            json_mode=settings.json_mode, options=_request_options(settings))
+    print(f"Fournisseur : {settings.llm_base_url}\nModèle : {settings.model}\nTest avec un mail fictif...", flush=True)
+    started = time.monotonic()
+    try:
+        verdict = classifier(SAMPLE_MAIL)
+    except FatalError:
+        raise
+    except Exception as exc:  # modèle qui répond mal : message clair plutôt qu'une trace Python
+        print(f"Erreur : le fournisseur d'IA a mal répondu : {exc}", file=sys.stderr)
+        return 1
+    if verdict is None:
+        print("Erreur : le modèle a refusé de répondre.", file=sys.stderr)
+        return 1
+    print(f"Réponse en {time.monotonic() - started:.1f} s (format « {classifier.mode} ») : "
+          f"catégorie « {verdict.category} », urgent : {'oui' if verdict.urgent else 'non'}, "
+          f"action requise : {'oui' if verdict.action_required else 'non'}, confiance : {verdict.confidence:.2f}")
+    print(f"Résumé : {verdict.summary}")
+    print("Le fournisseur d'IA fonctionne. Aucun de vos mails n'a été envoyé : ce test utilise un mail inventé.")
+    return 0
 
 
 def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
@@ -85,15 +138,12 @@ def cmd_setup(settings: Settings, args: argparse.Namespace) -> int:
 def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         settings = dataclasses.replace(settings, min_confidence=args.min_confidence)
-    client = _openai_client()
+    classifier = Classifier(_openai_client(settings), settings.model, CATEGORIES, settings.user_context,
+                            json_mode=settings.json_mode, pause=settings.llm_pause,
+                            options=_request_options(settings))
     # Verrou pris avant de lire l'état : un passage qui se termine ne peut pas l'écrire entre-temps.
     with RunLock(settings.home):
-        agent = Agent(
-            _mailbox(settings),
-            lambda mail: classify(client, settings.model, mail, CATEGORIES, settings.user_context),
-            settings,
-            CATEGORIES,
-        )
+        agent = Agent(_mailbox(settings), classifier, settings, CATEGORIES)
         warn_if_state_recovered(agent)
         report = agent.run(apply=args.apply, limit=args.limit, since_days=args.since_days,
                            reprocess=args.reprocess)
@@ -110,6 +160,9 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
         print("Simulation : rien n'a été modifié. Ajoutez --apply pour appliquer le tri.")
     if args.apply and report.outcomes:
         print(f"Passage {report.run_id} (pour l'annuler : python -m outlook_agent undo --run-id {report.run_id})")
+    if settings.json_mode == "auto" and classifier.mode != "schema":
+        print(f"Note : ce fournisseur d'IA n'accepte pas les réponses à schéma strict, l'agent est passé "
+              f"au mode « {classifier.mode} ». Pour l'utiliser d'emblée : OUTLOOK_JSON_MODE={classifier.mode} dans .env.")
     if report.aborted:
         print(f"Erreur : passage interrompu avant la fin : {report.aborted}", file=sys.stderr)
     return 1 if report.errors or report.aborted else 0
@@ -140,7 +193,7 @@ def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
     return 1 if any(item.error for item in items) else 0
 
 
-COMMANDS = {"login": cmd_login, "setup": cmd_setup, "run": cmd_run, "undo": cmd_undo}
+COMMANDS = {"test-ia": cmd_test_ia, "login": cmd_login, "setup": cmd_setup, "run": cmd_run, "undo": cmd_undo}
 
 
 def main(argv: list[str] | None = None) -> int:
