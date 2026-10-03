@@ -80,7 +80,7 @@ Lisez le résultat : pour chaque mail, le dossier prévu, puis un résumé (urge
 python -m outlook_agent run --apply
 ```
 
-Si quelque chose ne va pas, **annulez le dernier passage** (mails remis dans la boîte de réception, catégories et drapeaux d'origine rétablis) :
+Si quelque chose ne va pas, **annulez le dernier passage**. Les mails reviennent dans la boîte de réception, et l'agent retire les catégories et le drapeau qu'il avait posés, sans toucher à ceux que vous avez ajoutés depuis :
 
 ```
 python -m outlook_agent undo            # simulation

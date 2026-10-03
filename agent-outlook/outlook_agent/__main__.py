@@ -6,11 +6,27 @@ import dataclasses
 import os
 import sys
 
+import requests
+
 from .agent import Agent, Outcome, render_digest, setup_mailbox
 from .auth import AuthError, TokenProvider
 from .classifier import classify
 from .config import CATEGORIES, ConfigError, Settings
 from .graph import GraphClient, GraphError
+
+
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("doit être un entier supérieur ou égal à 1")
+    return number
+
+
+def confidence(value: str) -> float:
+    number = float(value.replace(",", "."))
+    if not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError("doit être entre 0 et 1 (par exemple 0.6)")
+    return number
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,9 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", help="trier la boîte de réception (simulation par défaut)")
     run.add_argument("--apply", action="store_true", help="appliquer réellement le tri")
-    run.add_argument("--limit", type=int, default=50, help="nombre maximum de mails à analyser (50)")
-    run.add_argument("--since-days", type=int, help="ne regarder que les mails des N derniers jours")
-    run.add_argument("--min-confidence", type=float, help="seuil de confiance, de 0 à 1")
+    run.add_argument("--limit", type=positive_int, default=50, help="nombre maximum de mails à analyser (50)")
+    run.add_argument("--since-days", type=positive_int, help="ne regarder que les mails des N derniers jours")
+    run.add_argument("--min-confidence", type=confidence, help="seuil de confiance, de 0 à 1")
     run.add_argument("--reprocess", action="store_true", help="ré-analyser aussi les mails déjà traités")
 
     undo = commands.add_parser("undo", help="annuler un passage (simulation par défaut)")
@@ -119,6 +135,9 @@ def main(argv: list[str] | None = None) -> int:
         return COMMANDS[args.command](Settings.from_env(), args)
     except (ConfigError, AuthError, GraphError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
+        return 1
+    except requests.RequestException as exc:
+        print(f"Erreur réseau (connexion à Microsoft impossible) : {exc}", file=sys.stderr)
         return 1
 
 

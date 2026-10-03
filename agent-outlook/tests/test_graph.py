@@ -1,4 +1,5 @@
 import pytest
+import requests
 
 from outlook_agent import graph
 from outlook_agent.graph import GraphClient, GraphError
@@ -24,7 +25,10 @@ class FakeSession:
 
     def request(self, method, url, params=None, json=None, headers=None, timeout=None):
         self.calls.append({"method": method, "url": url, "params": params, "json": json, "headers": headers})
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def make_client(responses):
@@ -34,8 +38,10 @@ def make_client(responses):
 
 
 @pytest.fixture(autouse=True)
-def no_sleep(monkeypatch):
-    monkeypatch.setattr(graph.time, "sleep", lambda seconds: None)
+def sleeps(monkeypatch):
+    recorded = []
+    monkeypatch.setattr(graph.time, "sleep", recorded.append)
+    return recorded
 
 
 def test_list_inbox_follows_pagination_and_respects_limit():
@@ -89,20 +95,40 @@ def test_child_folders_maps_lowercase_names_to_ids():
     assert client.child_folders() == {"à traiter urgent": "9"}
 
 
-def test_retries_on_throttling_then_succeeds():
+def test_get_message_reads_only_categories_and_flag():
+    client, session = make_client([FakeResponse(payload={"categories": ["A"], "flag": {}})])
+    assert client.get_message("1")["categories"] == ["A"]
+    assert session.calls[0]["params"] == {"$select": "categories,flag"}
+
+
+def test_retries_on_throttling_then_succeeds(sleeps):
     client, session = make_client([
         FakeResponse(429, payload={}, headers={"Retry-After": "3"}),
         FakeResponse(payload={"id": "nouveau"}),
     ])
     assert client.create_folder("Test") == "nouveau"
     assert len(session.calls) == 2
+    assert sleeps == [3.0]
 
 
-def test_gives_up_after_too_many_throttled_attempts():
+@pytest.mark.parametrize("failure", [
+    FakeResponse(502, payload={}),
+    FakeResponse(500, payload={}),
+    requests.ConnectionError("connexion coupée"),
+    requests.Timeout("délai dépassé"),
+])
+def test_retries_server_and_network_errors(failure):
+    client, session = make_client([failure, FakeResponse(payload={"id": "ok"})])
+    assert client.create_folder("Test") == "ok"
+    assert len(session.calls) == 2
+
+
+def test_gives_up_after_too_many_attempts_without_a_useless_last_wait(sleeps):
     client, session = make_client([FakeResponse(503, payload={})] * graph.MAX_ATTEMPTS)
     with pytest.raises(GraphError, match="trop de tentatives"):
         client.create_folder("Test")
     assert len(session.calls) == graph.MAX_ATTEMPTS
+    assert len(sleeps) == graph.MAX_ATTEMPTS - 1
 
 
 def test_error_status_raises_with_details():

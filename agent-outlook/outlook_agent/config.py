@@ -112,6 +112,10 @@ class Settings:
             min_confidence = float(os.environ.get("OUTLOOK_MIN_CONFIDENCE", "0.6"))
         except ValueError as exc:
             raise ConfigError(f"Valeur numérique invalide dans l'environnement : {exc}") from exc
+        if not 0.0 <= min_confidence <= 1.0:
+            raise ConfigError("OUTLOOK_MIN_CONFIDENCE doit être entre 0 et 1 (par exemple 0.6).")
+        if body_chars < 1:
+            raise ConfigError("OUTLOOK_BODY_CHARS doit être un nombre positif.")
         return cls(
             client_id=os.environ.get("OUTLOOK_CLIENT_ID", "").strip(),
             tenant_id=os.environ.get("OUTLOOK_TENANT_ID", "").strip() or "organizations",

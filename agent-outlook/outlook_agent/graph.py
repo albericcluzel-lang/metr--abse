@@ -11,7 +11,7 @@ import requests
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 MESSAGE_FIELDS = "id,subject,from,receivedDateTime,body,hasAttachments,importance,categories,flag"
 PAGE_SIZE = 25
-RETRY_STATUS = (429, 503, 504)
+RETRY_STATUS = (429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 5
 
 # Identifiants stables : un mail garde le même id quand il change de dossier (utile pour annuler).
@@ -36,22 +36,29 @@ class GraphClient:
         self._session = requests.Session()
 
     def _request(self, method: str, url: str, *, params=None, json=None, prefer: str = PREFER_IDS) -> dict:
+        delay, last_error = 0.0, ""
         for attempt in range(MAX_ATTEMPTS):
+            if attempt:
+                time.sleep(delay)
             headers = {"Authorization": f"Bearer {self._token()}", "Prefer": prefer}
-            response = self._session.request(
-                method, url, params=params, json=json, headers=headers, timeout=60
-            )
+            try:
+                response = self._session.request(
+                    method, url, params=params, json=json, headers=headers, timeout=60
+                )
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                delay, last_error = float(2 ** attempt), f"réseau : {exc}"
+                continue
             if response.status_code in RETRY_STATUS:
-                time.sleep(_retry_delay(response, attempt))
+                delay, last_error = _retry_delay(response, attempt), f"statut {response.status_code}"
                 continue
             if not response.ok:
                 raise GraphError(f"{method} {url} -> {response.status_code} {response.text[:300]}")
             return response.json() if response.content else {}
-        raise GraphError(f"{method} {url} : trop de tentatives")
+        raise GraphError(f"{method} {url} : trop de tentatives ({last_error})")
 
-    def _collect(self, url: str, params: dict | None = None, limit: int | None = None) -> list[dict]:
+    def _collect(self, url: str, params: dict | None = None, limit: int | None = None,
+                 prefer: str = PREFER_IDS) -> list[dict]:
         items: list[dict] = []
-        prefer = PREFER_TEXT_BODY if params and "$select" in params and "body" in params["$select"] else PREFER_IDS
         while url and (limit is None or len(items) < limit):
             data = self._request("GET", url, params=params, prefer=prefer)
             items.extend(data.get("value", []))
@@ -66,10 +73,19 @@ class GraphClient:
             "$select": MESSAGE_FIELDS,
             "$orderby": "receivedDateTime desc",
         }
-        if since_days:
+        if since_days is not None:
             since = datetime.now(timezone.utc) - timedelta(days=since_days)
             params["$filter"] = f"receivedDateTime ge {since.strftime('%Y-%m-%dT%H:%M:%SZ')}"
-        return self._collect(f"{GRAPH_URL}/me/mailFolders/inbox/messages", params, limit)
+        return self._collect(
+            f"{GRAPH_URL}/me/mailFolders/inbox/messages", params, limit, prefer=PREFER_TEXT_BODY
+        )
+
+    def get_message(self, message_id: str) -> dict:
+        """Catégories et drapeau actuels d'un mail."""
+        return self._request(
+            "GET", f"{GRAPH_URL}/me/messages/{quote(message_id, safe='')}",
+            params={"$select": "categories,flag"},
+        )
 
     def update_message(self, message_id: str, categories: list[str] | None = None,
                        flag_status: str | None = None) -> None:

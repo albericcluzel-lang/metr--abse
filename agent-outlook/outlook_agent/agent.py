@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -18,6 +19,7 @@ class Mailbox(Protocol):
     """Ce dont l'agent a besoin de la boîte mail (implémenté par GraphClient)."""
 
     def list_inbox_messages(self, limit: int, since_days: int | None = None) -> list[dict]: ...
+    def get_message(self, message_id: str) -> dict: ...
     def update_message(self, message_id: str, categories: list[str] | None = None,
                        flag_status: str | None = None) -> None: ...
     def move_message(self, message_id: str, destination: str) -> None: ...
@@ -74,18 +76,24 @@ class Decision:
     note: str = ""
 
 
+def managed_labels(categories: tuple[Category, ...]) -> set[str]:
+    """Catégories Outlook posées par l'agent (les autres appartiennent à l'utilisateur)."""
+    return {category.label for category in categories} | set(EXTRA_LABELS)
+
+
 def decide(verdict: Verdict | None, categories: tuple[Category, ...], min_confidence: float) -> Decision:
     by_key = {category.key: category for category in categories}
-    if verdict is None or verdict.category not in by_key:
+    # Une confiance hors de 0..1 (ex. 45 « pour cent ») ou NaN n'est pas fiable : on ne range pas.
+    if (verdict is None or verdict.category not in by_key
+            or not math.isfinite(verdict.confidence) or not 0.0 <= verdict.confidence <= 1.0):
         return Decision(None, None, (REVIEW_LABEL,), False, False, False, 0.0, "",
                         "classement impossible, laissé en boîte de réception")
 
     category = by_key[verdict.category]
-    confidence = min(max(verdict.confidence, 0.0), 1.0)
     common = dict(urgent=verdict.urgent, action_required=verdict.action_required,
-                  confidence=confidence, summary=verdict.summary)
+                  confidence=verdict.confidence, summary=verdict.summary)
 
-    if confidence < min_confidence:
+    if verdict.confidence < min_confidence:
         # Dans le doute on ne range pas, mais on garde le signal d'urgence visible.
         labels = (REVIEW_LABEL, URGENT_LABEL) if verdict.urgent else (REVIEW_LABEL,)
         return Decision(category, None, labels, verdict.urgent, note="confiance insuffisante, laissé en boîte de réception", **common)
@@ -97,6 +105,15 @@ def decide(verdict: Verdict | None, categories: tuple[Category, ...], min_confid
         labels.append(ACTION_LABEL)
     folder = URGENT_FOLDER if verdict.urgent else category.folder
     return Decision(category, folder, tuple(labels), verdict.urgent, **common)
+
+
+def ensure_folder(mailbox: Mailbox, folders: dict[str, str], name: str) -> tuple[str, bool]:
+    """Identifiant du sous-dossier `name`, créé s'il manque. Renvoie (id, créé ?)."""
+    key = name.casefold()
+    if key in folders:
+        return folders[key], False
+    folders[key] = mailbox.create_folder(name)
+    return folders[key], True
 
 
 @dataclass
@@ -130,9 +147,11 @@ class StateStore:
         self._seen: dict[str, str] = {}
         if path.exists():
             try:
-                self._seen = json.loads(path.read_text(encoding="utf-8")).get("processed", {})
-            except json.JSONDecodeError:
-                self._seen = {}
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                data = {}
+            processed = data.get("processed") if isinstance(data, dict) else None
+            self._seen = processed if isinstance(processed, dict) else {}
 
     def seen(self, mail_id: str) -> bool:
         return mail_id in self._seen
@@ -141,13 +160,15 @@ class StateStore:
         self._seen[mail_id] = datetime.now().isoformat(timespec="seconds")
 
     def save(self) -> None:
-        recent = dict(sorted(self._seen.items(), key=lambda item: item[1])[-self.MAX_ENTRIES:])
+        recent = dict(sorted(self._seen.items(), key=lambda item: str(item[1]))[-self.MAX_ENTRIES:])
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._path.write_text(json.dumps({"processed": recent}, ensure_ascii=False), encoding="utf-8")
 
 
 class ActionLog:
     """Journal de ce qui a été modifié, pour pouvoir annuler un passage."""
+
+    REQUIRED_KEYS = {"run_id", "id", "added_labels", "removed_labels", "flag_set", "moved_to"}
 
     def __init__(self, path: Path):
         self._path = path
@@ -158,10 +179,18 @@ class ActionLog:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def entries(self) -> list[dict]:
+        """Lignes valides du journal ; une ligne tronquée (arrêt brutal) est ignorée."""
         if not self._path.exists():
             return []
-        lines = self._path.read_text(encoding="utf-8").splitlines()
-        return [json.loads(line) for line in lines if line.strip()]
+        entries = []
+        for line in self._path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict) and self.REQUIRED_KEYS <= entry.keys():
+                entries.append(entry)
+        return entries
 
 
 @dataclass
@@ -215,7 +244,9 @@ class Agent:
         return report
 
     def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> None:
-        labels = mail.categories + [label for label in decision.labels if label not in mail.categories]
+        # On remplace les catégories posées par l'agent (re-classement) et on garde celles de l'utilisateur.
+        managed = managed_labels(self.categories)
+        labels = [label for label in mail.categories if label not in managed] + list(decision.labels)
         flag_status = "flagged" if decision.flag and mail.flag_status == "notFlagged" else None
         self.mailbox.update_message(mail.id, categories=labels, flag_status=flag_status)
 
@@ -225,22 +256,25 @@ class Agent:
             "id": mail.id,
             "subject": mail.subject[:100],
             "sender": mail.address,
-            "previous_categories": mail.categories,
-            "previous_flag": mail.flag_status,
+            "added_labels": [label for label in labels if label not in mail.categories],
+            "removed_labels": [label for label in mail.categories if label not in labels],
+            "flag_set": flag_status is not None,
             "moved_to": None,
         }
         try:
             if decision.folder:
-                key = decision.folder.casefold()
-                if key not in folders:
-                    folders[key] = self.mailbox.create_folder(decision.folder)
-                self.mailbox.move_message(mail.id, folders[key])
+                folder_id, _ = ensure_folder(self.mailbox, folders, decision.folder)
+                self.mailbox.move_message(mail.id, folder_id)
                 entry["moved_to"] = decision.folder
         finally:
             self.log.append(entry)
 
     def undo(self, *, apply: bool, run_id: str | None = None) -> list[UndoItem]:
-        """Remet les mails d'un passage dans la boîte de réception, avec leurs catégories d'origine."""
+        """Remet les mails d'un passage dans la boîte de réception et retire ce que l'agent a posé.
+
+        Seuls les changements de l'agent sont défaits : une catégorie ou un drapeau ajoutés
+        ensuite par l'utilisateur sont conservés.
+        """
         entries = self.log.entries()
         if not entries:
             return []
@@ -251,9 +285,12 @@ class Agent:
         for item in items:
             entry = item.entry
             try:
-                self.mailbox.update_message(
-                    entry["id"], categories=entry["previous_categories"], flag_status=entry["previous_flag"]
-                )
+                current = self.mailbox.get_message(entry["id"])
+                categories = [c for c in current.get("categories") or [] if c not in entry["added_labels"]]
+                categories += [c for c in entry["removed_labels"] if c not in categories]
+                current_flag = (current.get("flag") or {}).get("flagStatus")
+                flag_status = "notFlagged" if entry["flag_set"] and current_flag == "flagged" else None
+                self.mailbox.update_message(entry["id"], categories=categories, flag_status=flag_status)
                 if entry["moved_to"]:
                     self.mailbox.move_message(entry["id"], "inbox")
                 item.restored = True
@@ -267,11 +304,8 @@ def setup_mailbox(mailbox: Mailbox, categories: tuple[Category, ...]) -> list[st
     messages = []
     folders = mailbox.child_folders()
     for name in [category.folder for category in categories] + [URGENT_FOLDER]:
-        if name.casefold() in folders:
-            messages.append(f"Dossier déjà présent : {name}")
-        else:
-            folders[name.casefold()] = mailbox.create_folder(name)
-            messages.append(f"Dossier créé : {name}")
+        _, created = ensure_folder(mailbox, folders, name)
+        messages.append(f"Dossier {'créé' if created else 'déjà présent'} : {name}")
 
     wanted = {category.label: category.color for category in categories} | EXTRA_LABELS
     try:
@@ -294,12 +328,13 @@ def setup_mailbox(mailbox: Mailbox, categories: tuple[Category, ...]) -> list[st
 def render_digest(report: RunReport) -> str:
     """Résumé en français de ce qui demande l'attention, au format Markdown."""
     mode = "simulation, rien n'a été modifié" if not report.apply else "tri appliqué"
-    classified = [o for o in report.outcomes if o.decision]
-    left = [o for o in classified if o.decision.folder is None]
+    done = [o for o in report.outcomes if o.decision and not o.error]
+    moved = [o for o in done if o.decision.folder]
+    left = [o for o in done if not o.decision.folder]
     lines = [
         f"# Résumé du tri du {datetime.now():%d/%m/%Y à %H:%M} ({mode})",
         "",
-        f"{len(report.outcomes)} mails analysés : {len(classified) - len(left)} à ranger, "
+        f"{len(report.outcomes)} mails analysés : {len(moved)} {'rangés' if report.apply else 'à ranger'}, "
         f"{len(left)} laissés en boîte de réception, {len(report.errors)} en erreur. "
         f"Ignorés : {report.skipped_seen} déjà traités, {report.skipped_events} invitations.",
     ]
@@ -313,14 +348,14 @@ def render_digest(report: RunReport) -> str:
             lines.append(f"- **{o.mail.subject}** ({o.mail.sender or o.mail.address}) → {where}. "
                          f"{o.decision.summary}".rstrip())
 
-    section("Urgents", [o for o in classified if o.decision.urgent])
-    section("Actions à mener", [o for o in classified if o.decision.action_required and not o.decision.urgent])
+    # Chaque mail n'apparaît que dans une seule section.
+    section("Urgents", [o for o in done if o.decision.urgent])
+    section("Actions à mener", [o for o in moved if o.decision.action_required and not o.decision.urgent])
     section("Laissés en boîte de réception, à vérifier", [o for o in left if not o.decision.urgent])
 
     counts: dict[str, int] = {}
-    for o in classified:
-        if o.decision.folder:
-            counts[o.decision.folder] = counts.get(o.decision.folder, 0) + 1
+    for o in moved:
+        counts[o.decision.folder] = counts.get(o.decision.folder, 0) + 1
     if counts:
         lines.extend(["", "## Répartition", ""])
         lines.extend(f"- {folder} : {count}" for folder, count in sorted(counts.items()))

@@ -41,9 +41,18 @@ class FakeMailbox:
         self.messages = messages
         self.folders = dict(folders or {})
         self.writes = []
+        # État « côté serveur » de chaque mail, tenu à jour par update_message.
+        self.current = {
+            m["id"]: {"categories": list(m.get("categories", [])), "flag": dict(m.get("flag", {}))}
+            for m in messages
+        }
 
     def list_inbox_messages(self, limit, since_days=None):
         return self.messages[:limit]
+
+    def get_message(self, message_id):
+        state = self.current[message_id]
+        return {"categories": list(state["categories"]), "flag": dict(state["flag"])}
 
     def child_folders(self):
         return dict(self.folders)
@@ -54,6 +63,10 @@ class FakeMailbox:
 
     def update_message(self, message_id, categories=None, flag_status=None):
         self.writes.append(("update", message_id, categories, flag_status))
+        if categories is not None:
+            self.current[message_id]["categories"] = list(categories)
+        if flag_status is not None:
+            self.current[message_id]["flag"] = {"flagStatus": flag_status}
 
     def move_message(self, message_id, destination):
         self.writes.append(("move", message_id, destination))
@@ -109,8 +122,10 @@ def test_decide_missing_or_unknown_verdict_stays_in_inbox():
     assert decide(unknown, CATEGORIES, 0.6).folder is None
 
 
-def test_decide_clamps_confidence():
-    assert decide(verdict(confidence=7.0), CATEGORIES, 0.6).confidence == 1.0
+@pytest.mark.parametrize("bad", [45.0, -0.1, float("nan")])
+def test_decide_does_not_trust_out_of_range_confidence(bad):
+    decision = decide(verdict(confidence=bad), CATEGORIES, 0.6)
+    assert decision.folder is None and decision.labels == ("À vérifier",)
 
 
 # --- Lecture des mails ---------------------------------------------------------------------
@@ -173,6 +188,21 @@ def test_low_confidence_mail_is_labelled_but_not_moved(tmp_path):
     assert mailbox.writes == [("update", "1", ["À vérifier"], None)]
 
 
+def test_reclassifying_replaces_agent_labels_but_keeps_user_labels(tmp_path):
+    agent, mailbox = make_agent(
+        tmp_path, [raw_mail("1", categories=["Perso"])], [verdict(confidence=0.2), verdict("fournisseurs")]
+    )
+    agent.run(apply=True, limit=10)
+    assert mailbox.current["1"]["categories"] == ["Perso", "À vérifier"]
+
+    mailbox.messages[0]["categories"] = list(mailbox.current["1"]["categories"])
+    agent.run(apply=True, limit=10, reprocess=True)
+    assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
+
+    agent.undo(apply=True)
+    assert mailbox.current["1"]["categories"] == ["Perso", "À vérifier"]
+
+
 def test_meeting_messages_are_left_alone(tmp_path):
     message = raw_mail("1", **{"@odata.type": "#microsoft.graph.eventMessageRequest"})
     agent, mailbox = make_agent(tmp_path, [message], [])
@@ -215,11 +245,12 @@ def test_failed_move_is_reported_and_retried_later(tmp_path):
 
 # --- Annulation ----------------------------------------------------------------------------------
 
-def test_undo_restores_labels_flag_and_location(tmp_path):
+def test_undo_removes_only_agent_changes_and_moves_back(tmp_path):
     agent, mailbox = make_agent(
         tmp_path, [raw_mail("1", categories=["Perso"])], [verdict("securite", urgent=True)]
     )
     agent.run(apply=True, limit=10)
+    mailbox.current["1"]["categories"].append("Client X")  # ajouté à la main après le passage
     mailbox.writes.clear()
 
     assert not agent.undo(apply=False)[0].restored
@@ -227,7 +258,25 @@ def test_undo_restores_labels_flag_and_location(tmp_path):
 
     items = agent.undo(apply=True)
     assert items[0].restored
-    assert mailbox.writes == [("update", "1", ["Perso"], "notFlagged"), ("move", "1", "inbox")]
+    assert mailbox.writes == [("update", "1", ["Perso", "Client X"], "notFlagged"), ("move", "1", "inbox")]
+
+
+def test_undo_keeps_a_flag_the_agent_did_not_set(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    agent.run(apply=True, limit=10)
+    mailbox.current["1"]["flag"] = {"flagStatus": "flagged"}  # drapeau mis par l'utilisateur
+    mailbox.writes.clear()
+    agent.undo(apply=True)
+    assert mailbox.writes[0] == ("update", "1", [], None)
+
+
+def test_corrupted_state_and_truncated_log_do_not_crash(tmp_path):
+    (tmp_path / "state.json").write_text("[]", encoding="utf-8")
+    agent, _ = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    agent.run(apply=True, limit=10)
+    with (tmp_path / "actions.jsonl").open("a", encoding="utf-8") as handle:
+        handle.write('{"run_id": "tronqu')  # arrêt brutal pendant l'écriture
+    assert len(agent.undo(apply=False)) == 1
 
 
 def test_undo_with_empty_log(tmp_path):
@@ -270,6 +319,23 @@ def test_digest_lists_urgent_actions_and_errors(tmp_path):
     assert "## Urgents" in digest and "Coffrage bloqué" in digest and "Chantier arrêté" in digest
     assert "## Actions à mener" in digest and "Devis lot 3" in digest
     assert "## Erreurs" in digest and "panne" in digest
+
+
+def test_digest_lists_each_mail_once_and_excludes_failed_moves(tmp_path):
+    messages = [raw_mail("1", "Incertain"), raw_mail("2", "Bloqué")]
+    agent, mailbox = make_agent(
+        tmp_path, messages, [verdict(confidence=0.3, action_required=True), verdict()]
+    )
+
+    def broken_move(message_id, destination):
+        raise RuntimeError("Graph indisponible")
+
+    mailbox.move_message = broken_move
+    digest = render_digest(agent.run(apply=True, limit=10))
+    assert digest.count("Incertain") == 1 and digest.count("Bloqué") == 1
+    assert "0 rangés, 1 laissés en boîte de réception, 1 en erreur" in digest
+    assert "## Répartition" not in digest
+    assert "Bloqué : application" in digest
 
 
 def test_system_prompt_mentions_every_category():
