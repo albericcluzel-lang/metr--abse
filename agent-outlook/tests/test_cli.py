@@ -156,3 +156,52 @@ def test_local_model_is_never_reached_through_a_proxy(monkeypatch):
         assert reply.choices[0].message.content == "ok"
     finally:
         server.shutdown()
+
+
+def _fake_provider(monkeypatch, parse):
+    from tests.test_classifier import FakeClient
+
+    monkeypatch.setattr(cli, "_openai_client", lambda settings: FakeClient(parse=parse))
+
+
+def test_test_ia_checks_the_provider_with_a_made_up_email(monkeypatch, capsys):
+    from outlook_agent.classifier import Verdict
+    from tests.test_classifier import completion
+
+    seen = []
+
+    def parse(**kwargs):
+        seen.append(kwargs["messages"][1]["content"])
+        return completion(parsed=Verdict(category="devis_factures", urgent=False, action_required=True,
+                                         confidence=0.9, summary="Facture à régler."))
+
+    _fake_provider(monkeypatch, parse)
+    assert cli.main(["test-ia"]) == 0
+    out = capsys.readouterr().out
+    assert "devis_factures" in out and "fonctionne" in out
+    assert "compta@exemple.fr" in seen[0]  # le mail inventé, aucun vrai mail
+
+
+def test_test_ia_reports_a_refusal_or_a_bad_answer_without_traceback(monkeypatch, capsys):
+    from tests.test_classifier import completion
+
+    _fake_provider(monkeypatch, lambda **kw: completion(parsed=None))
+    assert cli.main(["test-ia"]) == 1
+    assert "refusé" in capsys.readouterr().err
+
+    def broken(**kwargs):
+        raise ValueError("JSON invalide")
+
+    _fake_provider(monkeypatch, broken)
+    assert cli.main(["test-ia"]) == 1
+    assert "mal répondu" in capsys.readouterr().err
+
+
+def test_test_ia_reports_a_rejected_key(monkeypatch, capsys):
+    import openai
+
+    from tests.test_classifier import sdk_error
+
+    _fake_provider(monkeypatch, lambda **kw: sdk_error(openai.AuthenticationError))
+    assert cli.main(["test-ia"]) == 1
+    assert "Clé API refusée" in capsys.readouterr().err

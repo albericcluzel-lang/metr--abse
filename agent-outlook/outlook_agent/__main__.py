@@ -1,14 +1,15 @@
-"""Ligne de commande : python -m outlook_agent {login,setup,run,undo}."""
+"""Ligne de commande : python -m outlook_agent {test-ia,login,setup,run,undo}."""
 from __future__ import annotations
 
 import argparse
 import dataclasses
 import os
 import sys
+import time
 
 import requests
 
-from .agent import Agent, Outcome, RunLock, render_digest, save_digest, setup_mailbox
+from .agent import Agent, Mail, Outcome, RunLock, render_digest, save_digest, setup_mailbox
 from .auth import TokenProvider
 from .classifier import Classifier
 from .config import CATEGORIES, ConfigError, FatalError, Settings
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="outlook_agent", description="Agent de tri de la boîte Outlook.")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    commands.add_parser("test-ia", help="vérifier le fournisseur d'IA avec un mail fictif (sans Outlook)")
     commands.add_parser("login", help="se connecter à Microsoft 365 (une seule fois)")
     commands.add_parser("setup", help="créer les dossiers et catégories dans Outlook")
 
@@ -84,6 +86,41 @@ def describe(outcome: Outcome) -> str:
     tags = ("[URGENT] " if decision.urgent else "") + ("[ACTION] " if decision.action_required else "")
     where = decision.folder or "reste en boîte de réception"
     return f"{tags}{outcome.mail.subject} ({outcome.mail.sender or outcome.mail.address}) -> {where}"
+
+
+# Mail inventé : le test ne lit ni n'envoie aucun vrai mail.
+SAMPLE_MAIL = Mail(
+    id="test", subject="Facture n°2026-118 - lot plâtrerie, chantier résidence Les Arceaux",
+    sender="Service comptabilité (exemple)", address="compta@exemple.fr", received="",
+    body="Bonjour, veuillez trouver ci-joint notre facture n°2026-118 pour la situation n°3 du lot "
+         "plâtrerie. Échéance de paiement au 15 du mois prochain. Merci de nous confirmer sa bonne "
+         "réception et la date de règlement prévue. Cordialement.",
+    has_attachments=True, importance="normal",
+)
+
+
+def cmd_test_ia(settings: Settings, args: argparse.Namespace) -> int:
+    """Vérifie clé, modèle et format de réponse du fournisseur d'IA, sans toucher à Outlook."""
+    classifier = Classifier(_openai_client(settings), settings.model, CATEGORIES, settings.user_context,
+                            json_mode=settings.json_mode, options=_request_options(settings))
+    print(f"Fournisseur : {settings.llm_base_url}\nModèle : {settings.model}\nTest avec un mail fictif...", flush=True)
+    started = time.monotonic()
+    try:
+        verdict = classifier(SAMPLE_MAIL)
+    except FatalError:
+        raise
+    except Exception as exc:  # modèle qui répond mal : message clair plutôt qu'une trace Python
+        print(f"Erreur : le fournisseur d'IA a mal répondu : {exc}", file=sys.stderr)
+        return 1
+    if verdict is None:
+        print("Erreur : le modèle a refusé de répondre.", file=sys.stderr)
+        return 1
+    print(f"Réponse en {time.monotonic() - started:.1f} s (format « {classifier.mode} ») : "
+          f"catégorie « {verdict.category} », urgent : {'oui' if verdict.urgent else 'non'}, "
+          f"action requise : {'oui' if verdict.action_required else 'non'}, confiance : {verdict.confidence:.2f}")
+    print(f"Résumé : {verdict.summary}")
+    print("Le fournisseur d'IA fonctionne. Aucun de vos mails n'a été envoyé : ce test utilise un mail inventé.")
+    return 0
 
 
 def cmd_login(settings: Settings, args: argparse.Namespace) -> int:
@@ -156,7 +193,7 @@ def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
     return 1 if any(item.error for item in items) else 0
 
 
-COMMANDS = {"login": cmd_login, "setup": cmd_setup, "run": cmd_run, "undo": cmd_undo}
+COMMANDS = {"test-ia": cmd_test_ia, "login": cmd_login, "setup": cmd_setup, "run": cmd_run, "undo": cmd_undo}
 
 
 def main(argv: list[str] | None = None) -> int:

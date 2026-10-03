@@ -78,6 +78,7 @@ Comptez environ 10 à 25 secondes par mail sans carte graphique dédiée (estima
    OPENAI_MAX_RETRIES=5
    ```
    Pour garantir un traitement dans l'UE, utilisez `https://api.eu.mistral.ai/v1`, environ 10 % plus cher. Si vous prenez `mistral-small-latest`, ajoutez `OUTLOOK_LLM_REASONING_EFFORT=none`.
+4. Vérifiez avec `python -m outlook_agent test-ia` : un mail inventé est classé, aucun de vos mails n'est envoyé.
 
 #### C. Google Gemini (Google AI Studio)
 
@@ -151,6 +152,7 @@ Ouvrir `.env` et renseigner `OUTLOOK_CLIENT_ID`, `OUTLOOK_TENANT_ID` et les lign
 ### 4. Premier lancement
 
 ```
+python -m outlook_agent test-ia          # vérifie le fournisseur d'IA avec un mail inventé (sans Outlook)
 python -m outlook_agent login            # connexion Microsoft : suivre le message (code à saisir sur une page web)
 python -m outlook_agent setup            # crée les dossiers dans Outlook (et les couleurs si la permission est donnée)
 python -m outlook_agent run --limit 20   # SIMULATION sur les 20 derniers mails
