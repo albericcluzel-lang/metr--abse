@@ -161,3 +161,30 @@ def test_calls_are_spaced_by_the_configured_pause():
 def test_json_object_is_extracted_from_wrapped_answers():
     assert _json_object('Voici :\n```json\n{"a": 1}\n```') == '{"a": 1}'
     assert _json_object("pas de json") == "pas de json"
+
+
+def test_provider_options_are_sent_in_every_mode():
+    options = {"temperature": 0, "max_tokens": 512, "reasoning_effort": "none"}
+    rejected = sdk_error(openai.BadRequestError, message="json_schema not supported")
+    client = FakeClient(parse=lambda **kw: rejected)
+    Classifier(client, "m", CATEGORIES, "ctx", options=options)(MAIL)
+    for _, kwargs in client.calls:  # schéma refusé, puis repli en mode JSON
+        assert {key: kwargs[key] for key in options} == options
+
+
+def test_tokens_per_minute_limit_of_groq_stops_the_run():
+    error = sdk_error(openai.APIStatusError, status_code=413, message="Request too large: tokens per minute")
+    with pytest.raises(ClassifierUnavailable, match="jetons par minute"):
+        classify(raising(error), "m", MAIL, CATEGORIES, "ctx")
+
+
+def test_rate_limit_is_not_swallowed_by_the_generic_status_branch():
+    error = sdk_error(openai.RateLimitError, status_code=429, code="rate_limit_exceeded")
+    with pytest.raises(ClassifierUnavailable, match="Limite de requêtes"):
+        classify(raising(error), "m", MAIL, CATEGORIES, "ctx")
+
+
+def test_other_server_errors_stay_errors_for_this_mail():
+    error = sdk_error(openai.InternalServerError, status_code=500, message="oops")
+    with pytest.raises(openai.InternalServerError):
+        classify(raising(error), "m", MAIL, CATEGORIES, "ctx")

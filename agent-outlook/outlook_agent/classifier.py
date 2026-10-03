@@ -91,9 +91,11 @@ class Classifier:
     """
 
     def __init__(self, client, model: str, categories: tuple[Category, ...], user_context: str, *,
-                 json_mode: str = "auto", pause: float = 0.0,
+                 json_mode: str = "auto", pause: float = 0.0, options: dict | None = None,
                  clock=time.monotonic, sleep=time.sleep):
         self._client = client
+        # Paramètres propres au fournisseur (temperature, max_tokens, reasoning_effort), envoyés tels quels.
+        self._options = dict(options or {})
         self._model = model
         self._categories = categories
         self._user_context = user_context
@@ -151,6 +153,15 @@ class Classifier:
                     "Limite de requêtes atteinte chez le fournisseur d'IA (offre gratuite ?) : le tri reprendra "
                     "au prochain passage. Augmentez OUTLOOK_LLM_PAUSE si cela se répète."
                 ) from exc
+            except openai.APIStatusError as exc:
+                # En dernier : classe parente des erreurs ci-dessus. 413 : Groq signale ainsi un
+                # dépassement de jetons par minute, que le SDK ne réessaie pas.
+                if exc.status_code != 413:
+                    raise
+                raise ClassifierUnavailable(
+                    "Limite de jetons par minute atteinte chez le fournisseur d'IA (offre gratuite ?) : le tri "
+                    "reprendra au prochain passage. Augmentez OUTLOOK_LLM_PAUSE ou baissez OUTLOOK_LLM_MAX_TOKENS."
+                ) from exc
 
     def _wait_turn(self) -> None:
         """Espace les appels d'au moins `pause` secondes (limites par minute des offres gratuites)."""
@@ -167,12 +178,14 @@ class Classifier:
         if mode == "schema":
             completion = self._client.chat.completions.parse(
                 model=self._model, messages=[{"role": "system", "content": system}, user],
-                response_format=model,
+                response_format=model, **self._options,
             )
             return completion.choices[0].message.parsed
 
         system += JSON_INSTRUCTIONS.format(keys=", ".join(category_keys(self._categories)))
-        extra = {"response_format": {"type": "json_object"}} if mode == "json" else {}
+        extra = dict(self._options)
+        if mode == "json":
+            extra["response_format"] = {"type": "json_object"}
         completion = self._client.chat.completions.create(
             model=self._model, messages=[{"role": "system", "content": system}, user], **extra,
         )

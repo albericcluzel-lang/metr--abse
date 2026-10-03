@@ -5,7 +5,6 @@ import argparse
 import dataclasses
 import os
 import sys
-from urllib.parse import urlparse
 
 import requests
 
@@ -50,19 +49,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
-
-
 def _openai_client(settings: Settings):
     """Client du fournisseur d'IA : OpenAI par défaut, ou tout service compatible (OPENAI_BASE_URL)."""
     key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not key and urlparse(settings.llm_base_url).hostname in LOCAL_HOSTS:
+    if not key and settings.llm_is_local:
         key = "local"  # un modèle local (Ollama, LM Studio) n'a pas besoin de vraie clé
     if not key:
         raise ConfigError("OPENAI_API_KEY manquante : clé du fournisseur d'IA, voir le README, étape 1.")
-    from openai import OpenAI
+    import openai
 
-    return OpenAI(api_key=key, base_url=settings.llm_base_url, max_retries=settings.llm_max_retries)
+    extra = {}
+    if settings.llm_is_local:
+        # Jamais de proxy vers un modèle local : sinon le contenu des mails partirait vers le proxy
+        # de l'entreprise (variables HTTP_PROXY ou proxy système de Windows).
+        extra["http_client"] = openai.DefaultHttpxClient(trust_env=False)
+    return openai.OpenAI(api_key=key, base_url=settings.llm_base_url, max_retries=settings.llm_max_retries, **extra)
+
+
+def _request_options(settings: Settings) -> dict:
+    """Paramètres du modèle définis dans .env (rien n'est envoyé pour ceux laissés vides)."""
+    options = {"temperature": settings.llm_temperature, "max_tokens": settings.llm_max_tokens,
+               "reasoning_effort": settings.llm_reasoning_effort}
+    return {name: value for name, value in options.items() if value is not None}
 
 
 def _mailbox(settings: Settings) -> GraphClient:
@@ -94,7 +102,8 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
     if args.min_confidence is not None:
         settings = dataclasses.replace(settings, min_confidence=args.min_confidence)
     classifier = Classifier(_openai_client(settings), settings.model, CATEGORIES, settings.user_context,
-                            json_mode=settings.json_mode, pause=settings.llm_pause)
+                            json_mode=settings.json_mode, pause=settings.llm_pause,
+                            options=_request_options(settings))
     # Verrou pris avant de lire l'état : un passage qui se termine ne peut pas l'écrire entre-temps.
     with RunLock(settings.home):
         agent = Agent(_mailbox(settings), classifier, settings, CATEGORIES)
