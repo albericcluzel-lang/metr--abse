@@ -14,6 +14,10 @@ class ConfigError(RuntimeError):
     """Réglage manquant ou invalide."""
 
 
+class FatalError(RuntimeError):
+    """Erreur qui toucherait tous les mails (clé refusée, connexion expirée...) : le passage s'arrête."""
+
+
 @dataclass(frozen=True)
 class Category:
     key: str          # identifiant renvoyé par l'IA
@@ -105,11 +109,10 @@ class Settings:
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv(PROJECT_DIR / ".env")
-        load_dotenv()
-        home = Path(os.environ.get("OUTLOOK_AGENT_HOME", "~/.outlook_agent")).expanduser()
+        home = Path(_env("OUTLOOK_AGENT_HOME", "~/.outlook_agent")).expanduser()
         try:
-            body_chars = int(os.environ.get("OUTLOOK_BODY_CHARS", "1200"))
-            min_confidence = float(os.environ.get("OUTLOOK_MIN_CONFIDENCE", "0.6").replace(",", "."))
+            body_chars = int(_env("OUTLOOK_BODY_CHARS", "1200"))
+            min_confidence = float(_env("OUTLOOK_MIN_CONFIDENCE", "0.6").replace(",", "."))
         except ValueError as exc:
             raise ConfigError(f"Valeur numérique invalide dans l'environnement : {exc}") from exc
         if not 0.0 <= min_confidence <= 1.0:
@@ -117,12 +120,17 @@ class Settings:
         if body_chars < 1:
             raise ConfigError("OUTLOOK_BODY_CHARS doit être un nombre positif.")
         return cls(
-            client_id=os.environ.get("OUTLOOK_CLIENT_ID", "").strip(),
-            tenant_id=os.environ.get("OUTLOOK_TENANT_ID", "").strip() or "organizations",
-            scopes=tuple(os.environ.get("OUTLOOK_SCOPES", "Mail.ReadWrite").split()),
-            model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini").strip(),
+            client_id=_env("OUTLOOK_CLIENT_ID"),
+            tenant_id=_env("OUTLOOK_TENANT_ID", "organizations"),
+            scopes=tuple(_env("OUTLOOK_SCOPES", "Mail.ReadWrite").split()),
+            model=_env("OPENAI_MODEL", "gpt-4o-mini"),
             home=home,
             body_chars=body_chars,
             min_confidence=min_confidence,
-            user_context=os.environ.get("OUTLOOK_AGENT_CONTEXT", DEFAULT_CONTEXT),
+            user_context=_env("OUTLOOK_AGENT_CONTEXT", DEFAULT_CONTEXT),
         )
+
+
+def _env(name: str, default: str = "") -> str:
+    """Variable d'environnement ; une valeur laissée vide dans .env compte comme absente."""
+    return os.environ.get(name, "").strip() or default

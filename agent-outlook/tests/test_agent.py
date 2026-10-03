@@ -1,14 +1,17 @@
 import json
+import os
+import time
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from outlook_agent.agent import (
-    Agent, Mail, StateStore, decide, is_meeting_message, render_digest, setup_mailbox,
+    Agent, Mail, RunLock, StateStore, decide, is_meeting_message, render_digest, setup_mailbox,
 )
-from outlook_agent.classifier import Verdict, build_system_prompt, classify
-from outlook_agent.config import CATEGORIES, URGENT_FOLDER, Settings
+from outlook_agent.auth import AuthError
+from outlook_agent.classifier import ClassifierUnavailable, Verdict, build_system_prompt, classify
+from outlook_agent.config import CATEGORIES, URGENT_FOLDER, FatalError, Settings
 
 
 def make_settings(tmp_path, **overrides):
@@ -302,7 +305,74 @@ def test_state_is_saved_even_if_the_run_is_interrupted(tmp_path):
         agent.run(apply=True, limit=10)
     reloaded = StateStore(tmp_path / "state.json")
     assert reloaded.seen("1") and not reloaded.seen("2")
-    assert not (tmp_path / "state.json.tmp").exists()
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+@pytest.mark.parametrize("where", ["classement", "lecture"])
+def test_error_affecting_every_mail_stops_the_run(tmp_path, where):
+    messages = [raw_mail("1"), raw_mail("2"), raw_mail("3")]
+    verdicts = [verdict(), ClassifierUnavailable("Clé refusée"), verdict()] if where == "classement" else [verdict()] * 3
+    agent, mailbox = make_agent(tmp_path, messages, verdicts)
+    if where == "lecture":
+        original = mailbox.get_body
+
+        def expired_after_first(message_id):
+            if message_id != "1":
+                raise AuthError("Connexion Microsoft requise")
+            return original(message_id)
+
+        mailbox.get_body = expired_after_first
+    with pytest.raises(FatalError):
+        agent.run(apply=True, limit=10)
+    reloaded = StateStore(tmp_path / "state.json")
+    assert reloaded.seen("1") and not reloaded.seen("2") and not reloaded.seen("3")
+
+
+def test_failed_move_keeps_track_of_agent_labels_for_the_retry(tmp_path):
+    agent, mailbox = make_agent(
+        tmp_path, [raw_mail("1", categories=["Perso"])], [verdict("chantier", urgent=True), verdict("fournisseurs")]
+    )
+    original_move = mailbox.move_message
+    mailbox.move_message = failing("Graph indisponible")
+    agent.run(apply=True, limit=10)
+    assert mailbox.current["1"]["categories"] == ["Perso", "Chantier", "Urgent"]
+    assert not agent.state.seen("1")  # sera repris
+
+    mailbox.move_message = original_move
+    mailbox.messages[0]["categories"] = list(mailbox.current["1"]["categories"])
+    agent.run(apply=True, limit=10)
+    assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
+
+
+def test_state_never_forgets_mails_left_in_the_inbox(tmp_path, monkeypatch):
+    monkeypatch.setattr(StateStore, "MAX_MOVED_ENTRIES", 1)
+    state = StateStore(tmp_path / "state.json")
+    state.mark("rangé-ancien", ["Chantier"], moved=True)
+    state.mark("en-boîte", ["À vérifier"])
+    state.mark("rangé-récent", ["Chantier"], moved=True)
+    state.save()
+    reloaded = StateStore(tmp_path / "state.json")
+    assert not reloaded.seen("rangé-ancien")
+    assert reloaded.seen("en-boîte") and reloaded.seen("rangé-récent")
+
+
+def test_run_ids_are_unique_even_within_the_same_second(tmp_path):
+    agent, _ = make_agent(tmp_path, [], [])
+    assert agent.run(apply=False, limit=1).run_id != agent.run(apply=False, limit=1).run_id
+
+
+def test_run_lock_prevents_two_runs_and_recovers_from_a_stale_lock(tmp_path):
+    with RunLock(tmp_path):
+        with pytest.raises(FatalError, match="en cours"):
+            with RunLock(tmp_path):
+                pass
+    assert not (tmp_path / "agent.lock").exists()
+
+    (tmp_path / "agent.lock").write_text("123")
+    old = time.time() - RunLock.STALE_AFTER - 10
+    os.utime(tmp_path / "agent.lock", (old, old))
+    with RunLock(tmp_path):  # verrou abandonné par un passage arrêté brutalement
+        pass
 
 
 def test_state_from_an_older_format_is_still_read(tmp_path):
@@ -344,6 +414,30 @@ def test_second_undo_targets_the_previous_run_not_the_same_one(tmp_path):
     assert agent.undo(apply=True)[0].restored
     mailbox.writes.clear()
     assert agent.undo(apply=True) == []  # plus rien à annuler
+    assert mailbox.writes == []
+
+
+def test_undo_of_an_older_run_waits_for_the_newer_one(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict(confidence=0.2), verdict("chantier")])
+    first = agent.run(apply=True, limit=10).run_id
+    mailbox.messages[0]["categories"] = list(mailbox.current["1"]["categories"])
+    agent.run(apply=True, limit=10, reprocess=True)
+    mailbox.writes.clear()
+
+    items = agent.undo(apply=True, run_id=first)
+    assert "plus récent" in items[0].error and mailbox.writes == []
+
+    agent.undo(apply=True)  # le plus récent d'abord
+    assert agent.undo(apply=True, run_id=first)[0].restored
+    assert mailbox.current["1"]["categories"] == []
+
+
+def test_undo_of_an_already_undone_run_does_nothing(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()])
+    run_id = agent.run(apply=True, limit=10).run_id
+    agent.undo(apply=True)
+    mailbox.writes.clear()
+    assert agent.undo(apply=True, run_id=run_id) == []
     assert mailbox.writes == []
 
 

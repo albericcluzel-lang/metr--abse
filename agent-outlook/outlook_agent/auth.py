@@ -5,10 +5,10 @@ import os
 
 import msal
 
-from .config import ConfigError, Settings
+from .config import ConfigError, FatalError, Settings
 
 
-class AuthError(RuntimeError):
+class AuthError(FatalError):
     """Connexion Microsoft impossible ou à refaire."""
 
 

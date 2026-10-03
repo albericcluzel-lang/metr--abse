@@ -5,6 +5,8 @@ import json
 import math
 import os
 import re
+import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +14,7 @@ from typing import Callable, Iterator, Protocol
 
 from .classifier import Verdict
 from .config import (
-    ACTION_LABEL, EXTRA_LABELS, REVIEW_LABEL, URGENT_FOLDER, URGENT_LABEL, Category, Settings,
+    ACTION_LABEL, EXTRA_LABELS, REVIEW_LABEL, URGENT_FOLDER, URGENT_LABEL, Category, FatalError, Settings,
 )
 
 
@@ -138,9 +140,43 @@ class RunReport:
 def _write_atomic(path: Path, text: str) -> None:
     """Écrit d'abord un fichier temporaire : un arrêt brutal ne laisse jamais un fichier à moitié écrit."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(path.name + ".tmp")
+    temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     temporary.write_text(text, encoding="utf-8")
     os.replace(temporary, path)
+
+
+class RunLock:
+    """Empêche deux passages simultanés (tâche planifiée et lancement manuel, par exemple)."""
+
+    STALE_AFTER = 3 * 3600  # un verrou plus vieux vient d'un passage arrêté brutalement
+
+    def __init__(self, home: Path):
+        self._path = home / "agent.lock"
+
+    def __enter__(self) -> "RunLock":
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        for _ in range(2):
+            try:
+                fd = os.open(self._path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    age = time.time() - self._path.stat().st_mtime
+                except FileNotFoundError:
+                    continue  # libéré entre-temps
+                if age < self.STALE_AFTER:
+                    raise FatalError(
+                        "Un autre passage de l'agent est en cours. Réessayez plus tard "
+                        f"(si aucun ne tourne, supprimez {self._path})."
+                    )
+                self._path.unlink(missing_ok=True)
+                continue
+            with os.fdopen(fd, "w") as handle:
+                handle.write(str(os.getpid()))
+            return self
+        raise FatalError(f"Impossible de prendre le verrou {self._path}.")
+
+    def __exit__(self, *exc_info) -> None:
+        self._path.unlink(missing_ok=True)
 
 
 class StateStore:
@@ -150,11 +186,13 @@ class StateStore:
     par l'agent permet de ne jamais retirer une catégorie de l'utilisateur, même de même nom.
     """
 
-    MAX_ENTRIES = 5000
+    # Seuls les mails rangés hors de la boîte de réception sont oubliés au-delà de ce nombre :
+    # ceux qui y sont restés ne doivent jamais être ré-analysés.
+    MAX_MOVED_ENTRIES = 5000
 
     def __init__(self, path: Path):
         self._path = path
-        self._seen: dict[str, dict] = {}
+        self._entries: dict[str, dict] = {}
         if path.exists():
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
@@ -162,24 +200,34 @@ class StateStore:
                 data = {}
             processed = data.get("processed") if isinstance(data, dict) else None
             if isinstance(processed, dict):
-                self._seen = {
+                self._entries = {
                     mail_id: entry if isinstance(entry, dict) else {"time": str(entry), "labels": []}
                     for mail_id, entry in processed.items()
                 }
 
     def seen(self, mail_id: str) -> bool:
-        return mail_id in self._seen
+        """Traité jusqu'au bout. Un traitement interrompu sera repris au prochain passage."""
+        entry = self._entries.get(mail_id)
+        return entry is not None and entry.get("done", True)
 
     def agent_labels(self, mail_id: str) -> list[str]:
-        labels = self._seen.get(mail_id, {}).get("labels")
+        labels = self._entries.get(mail_id, {}).get("labels")
         return list(labels) if isinstance(labels, list) else []
 
-    def mark(self, mail_id: str, labels: list[str]) -> None:
-        self._seen[mail_id] = {"time": datetime.now().isoformat(timespec="seconds"), "labels": labels}
+    def mark(self, mail_id: str, labels: list[str], *, done: bool = True, moved: bool = False) -> None:
+        self._entries[mail_id] = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "labels": labels, "done": done, "moved": moved,
+        }
 
     def save(self) -> None:
-        recent = sorted(self._seen.items(), key=lambda item: str(item[1].get("time", "")))
-        _write_atomic(self._path, json.dumps({"processed": dict(recent[-self.MAX_ENTRIES:])}, ensure_ascii=False))
+        moved = sorted(
+            (item for item in self._entries.items() if item[1].get("moved")),
+            key=lambda item: str(item[1].get("time", "")),
+        )
+        forgotten = {mail_id for mail_id, _ in moved[:-self.MAX_MOVED_ENTRIES]}
+        kept = {mail_id: entry for mail_id, entry in self._entries.items() if mail_id not in forgotten}
+        _write_atomic(self._path, json.dumps({"processed": kept}, ensure_ascii=False))
 
 
 class ActionLog:
@@ -236,7 +284,8 @@ class Agent:
 
     def run(self, *, apply: bool, limit: int, since_days: int | None = None,
             reprocess: bool = False) -> RunReport:
-        report = RunReport(run_id=datetime.now().strftime("%Y%m%d-%H%M%S"), apply=apply)
+        run_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:4]}"
+        report = RunReport(run_id=run_id, apply=apply)
         folders = self.mailbox.child_folders()
 
         # Liste complète avant toute modification : déplacer des mails pendant la pagination
@@ -262,28 +311,34 @@ class Agent:
         return report
 
     def _process(self, raw: dict, apply: bool, folders: dict[str, str], run_id: str) -> Outcome:
-        # Chaque étape est protégée : une erreur sur un mail ne doit pas arrêter les autres.
+        # Une erreur propre à un mail ne doit pas arrêter les autres ; une erreur qui les toucherait
+        # tous (FatalError : clé refusée, connexion expirée...) arrête le passage.
         try:
             mail = Mail.from_graph(raw, self.mailbox.get_body(raw["id"]), self.settings.body_chars)
+        except FatalError:
+            raise
         except Exception as exc:
             return Outcome(Mail.from_graph(raw, "", 0), None, error=f"lecture : {exc}")
         try:
             decision = decide(self.classify(mail), self.categories, self.settings.min_confidence)
+        except FatalError:
+            raise
         except Exception as exc:
             return Outcome(mail, None, error=f"classement : {exc}")
 
         outcome = Outcome(mail, decision)
         if apply:
             try:
-                owned = self._apply(mail, decision, folders, run_id)
+                self._apply(mail, decision, folders, run_id)
                 outcome.applied = True
-                self.state.mark(mail.id, owned)
+            except FatalError:
+                raise
             except Exception as exc:
                 outcome.error = f"application : {exc}"
         return outcome
 
-    def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> list[str]:
-        """Pose catégories, drapeau et dossier. Renvoie les catégories que l'agent possède désormais."""
+    def _apply(self, mail: Mail, decision: Decision, folders: dict[str, str], run_id: str) -> None:
+        """Pose catégories, drapeau et dossier, et note dans l'état ce qui appartient à l'agent."""
         # Un re-classement remplace les catégories posées auparavant par l'agent ; celles de
         # l'utilisateur restent, et une catégorie qu'il avait déjà n'est jamais considérée comme à l'agent.
         owned_before = self.state.agent_labels(mail.id)
@@ -292,6 +347,9 @@ class Agent:
         labels = kept + owned
         flag_status = "flagged" if decision.flag and mail.flag_status == "notFlagged" else None
         self.mailbox.update_message(mail.id, categories=labels, flag_status=flag_status)
+        # Noté tout de suite : si le déplacement échoue, le prochain passage reprend ce mail
+        # en sachant quelles catégories sont à l'agent.
+        self.state.mark(mail.id, owned, done=False)
 
         entry = {
             "run_id": run_id,
@@ -312,27 +370,38 @@ class Agent:
                 entry["moved_to"] = decision.folder
         finally:
             self.log.append(entry)
-        return owned
+        self.state.mark(mail.id, owned, moved=entry["moved_to"] is not None)
 
     def undo(self, *, apply: bool, run_id: str | None = None) -> list[UndoItem]:
         """Remet les mails d'un passage dans la boîte de réception et retire ce que l'agent a posé.
 
         Seuls les changements de l'agent sont défaits : une catégorie ou un drapeau ajoutés
         ensuite par l'utilisateur sont conservés. Sans `run_id`, annule le dernier passage
-        qui ne l'a pas déjà été.
+        qui ne l'a pas déjà été. Un passage déjà annulé n'est jamais rejoué, et un mail modifié
+        par un passage plus récent n'est pas touché tant que ce passage n'est pas annulé.
         """
         entries = self.log.entries()
+        undone = self.log.undone_runs()
+        active = list(dict.fromkeys(entry["run_id"] for entry in entries if entry["run_id"] not in undone))
         if run_id is None:
-            undone = self.log.undone_runs()
-            remaining = [entry["run_id"] for entry in entries if entry["run_id"] not in undone]
-            if not remaining:
+            if not active:
                 return []
-            run_id = remaining[-1]
+            run_id = active[-1]
+        elif run_id not in active:
+            return []  # passage inconnu ou déjà annulé
+
+        later_runs = set(active[active.index(run_id) + 1:])
+        touched_later = {entry["id"] for entry in entries if entry["run_id"] in later_runs}
         items = [UndoItem(entry) for entry in entries if entry["run_id"] == run_id]
-        if not apply or not items:
+        for item in items:
+            if item.entry["id"] in touched_later:
+                item.error = "modifié par un passage plus récent : annulez d'abord celui-ci"
+        if not apply:
             return items
 
         for item in items:
+            if item.error:
+                continue
             entry = item.entry
             try:
                 current = self.mailbox.get_message(entry["id"])
@@ -345,6 +414,9 @@ class Agent:
                     self.mailbox.move_message(entry["id"], "inbox")
                 self.state.mark(entry["id"], list(entry.get("owned_before") or []))
                 item.restored = True
+            except FatalError:
+                self.state.save()
+                raise
             except Exception as exc:
                 item.error = str(exc)
 

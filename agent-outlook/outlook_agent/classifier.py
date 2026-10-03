@@ -1,25 +1,40 @@
 """Classement d'un mail par l'API OpenAI, avec une réponse structurée et bornée."""
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel
+import openai
+from pydantic import BaseModel, create_model
 
-from .config import CATEGORIES, Category
+from .config import CATEGORIES, Category, FatalError
 
 if TYPE_CHECKING:
     from .agent import Mail
 
-# Le modèle ne peut répondre qu'avec l'une des clés de CATEGORIES.
-CategoryKey = Literal[tuple(category.key for category in CATEGORIES)]  # type: ignore[valid-type]
+
+class ClassifierUnavailable(FatalError):
+    """OpenAI refuse toutes les demandes (clé, crédit, modèle, réseau)."""
 
 
-class Verdict(BaseModel):
-    category: CategoryKey
-    urgent: bool
-    action_required: bool
-    confidence: float
-    summary: str
+@lru_cache(maxsize=None)
+def verdict_model(keys: tuple[str, ...]) -> type[BaseModel]:
+    """Réponse attendue de l'IA : `category` ne peut être que l'une des clés données."""
+    return create_model(
+        "Verdict",
+        category=(Literal[keys], ...),  # type: ignore[valid-type]
+        urgent=(bool, ...),
+        action_required=(bool, ...),
+        confidence=(float, ...),
+        summary=(str, ...),
+    )
+
+
+def category_keys(categories: tuple[Category, ...]) -> tuple[str, ...]:
+    return tuple(category.key for category in categories)
+
+
+Verdict = verdict_model(category_keys(CATEGORIES))
 
 
 def build_system_prompt(categories: tuple[Category, ...], user_context: str) -> str:
@@ -57,14 +72,35 @@ def build_user_message(mail: "Mail") -> str:
 
 
 def classify(client, model: str, mail: "Mail", categories: tuple[Category, ...],
-             user_context: str) -> Verdict | None:
-    """Verdict de l'IA, ou None si elle refuse de répondre."""
-    completion = client.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": build_system_prompt(categories, user_context)},
-            {"role": "user", "content": build_user_message(mail)},
-        ],
-        response_format=Verdict,
-    )
+             user_context: str) -> BaseModel | None:
+    """Verdict de l'IA, ou None si elle refuse de répondre.
+
+    Les erreurs qui toucheraient tous les mails arrêtent le passage (ClassifierUnavailable)
+    au lieu d'être répétées mail après mail.
+    """
+    try:
+        completion = client.chat.completions.parse(
+            model=model,
+            messages=[
+                {"role": "system", "content": build_system_prompt(categories, user_context)},
+                {"role": "user", "content": build_user_message(mail)},
+            ],
+            response_format=verdict_model(category_keys(categories)),
+        )
+    except openai.AuthenticationError as exc:
+        raise ClassifierUnavailable("Clé API OpenAI refusée : vérifiez OPENAI_API_KEY dans .env.") from exc
+    except openai.PermissionDeniedError as exc:
+        raise ClassifierUnavailable(
+            f"OpenAI refuse l'accès au modèle « {model} » pour cette clé ou ce projet."
+        ) from exc
+    except openai.NotFoundError as exc:
+        raise ClassifierUnavailable(f"Modèle OpenAI « {model} » introuvable : changez OPENAI_MODEL dans .env.") from exc
+    except openai.APIConnectionError as exc:
+        raise ClassifierUnavailable("Connexion à OpenAI impossible (réseau ou pare-feu).") from exc
+    except openai.RateLimitError as exc:
+        if getattr(exc, "code", None) == "insufficient_quota":
+            raise ClassifierUnavailable(
+                "Crédit API OpenAI épuisé : ajoutez du crédit sur platform.openai.com (Billing)."
+            ) from exc
+        raise
     return completion.choices[0].message.parsed

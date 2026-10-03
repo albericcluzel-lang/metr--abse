@@ -32,6 +32,25 @@ def test_settings_accept_french_decimal_comma(monkeypatch):
     assert Settings.from_env().min_confidence == 0.7
 
 
+def test_settings_left_empty_in_env_file_use_defaults(monkeypatch):
+    for name in ("OUTLOOK_SCOPES", "OPENAI_MODEL", "OUTLOOK_AGENT_HOME", "OUTLOOK_TENANT_ID"):
+        monkeypatch.setenv(name, " ")
+    settings = Settings.from_env()
+    assert settings.scopes == ("Mail.ReadWrite",)
+    assert settings.model == "gpt-4o-mini"
+    assert settings.home.name == ".outlook_agent"
+    assert settings.tenant_id == "organizations"
+
+
+def test_file_errors_are_reported_without_traceback(monkeypatch, capsys):
+    def read_only(settings, args):
+        raise PermissionError(13, "Permission refusée", "/x/state.json")
+
+    monkeypatch.setitem(cli.COMMANDS, "setup", read_only)
+    assert cli.main(["setup"]) == 1
+    assert "Erreur de fichier" in capsys.readouterr().err
+
+
 def test_network_errors_are_reported_without_traceback(monkeypatch, capsys):
     def offline(settings, args):
         raise requests.ConnectionError("hors ligne")

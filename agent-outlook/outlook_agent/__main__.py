@@ -8,10 +8,10 @@ import sys
 
 import requests
 
-from .agent import Agent, Outcome, render_digest, setup_mailbox
-from .auth import AuthError, TokenProvider
+from .agent import Agent, Outcome, RunLock, render_digest, setup_mailbox
+from .auth import TokenProvider
 from .classifier import classify
-from .config import CATEGORIES, ConfigError, Settings
+from .config import CATEGORIES, ConfigError, FatalError, Settings
 from .graph import GraphClient, GraphError
 
 
@@ -92,8 +92,9 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
         settings,
         CATEGORIES,
     )
-    report = agent.run(apply=args.apply, limit=args.limit, since_days=args.since_days,
-                       reprocess=args.reprocess)
+    with RunLock(settings.home):
+        report = agent.run(apply=args.apply, limit=args.limit, since_days=args.since_days,
+                           reprocess=args.reprocess)
 
     for outcome in report.outcomes:
         print(describe(outcome))
@@ -111,12 +112,13 @@ def cmd_run(settings: Settings, args: argparse.Namespace) -> int:
 
 def cmd_undo(settings: Settings, args: argparse.Namespace) -> int:
     agent = Agent(_mailbox(settings), lambda mail: None, settings, CATEGORIES)
-    items = agent.undo(apply=args.apply, run_id=args.run_id)
+    with RunLock(settings.home):
+        items = agent.undo(apply=args.apply, run_id=args.run_id)
     if not items:
-        print("Rien à annuler.")
+        print("Rien à annuler." if not args.run_id else f"Rien à annuler : passage {args.run_id} inconnu ou déjà annulé.")
         return 0
     for item in items:
-        status = "remis" if item.restored else (f"ERREUR {item.error}" if item.error else "à remettre")
+        status = "remis" if item.restored else (f"NON ANNULÉ : {item.error}" if item.error else "à remettre")
         print(f"[{status}] {item.entry.get('subject', '(sans objet)')} "
               f"(était rangé dans : {item.entry['moved_to'] or 'boîte de réception'})")
     if not args.apply:
@@ -134,11 +136,14 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return COMMANDS[args.command](Settings.from_env(), args)
-    except (ConfigError, AuthError, GraphError) as exc:
+    except (ConfigError, FatalError, GraphError) as exc:
         print(f"Erreur : {exc}", file=sys.stderr)
         return 1
-    except requests.RequestException as exc:
+    except requests.RequestException as exc:  # avant OSError, dont elle hérite
         print(f"Erreur réseau (connexion à Microsoft impossible) : {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"Erreur de fichier : {exc}", file=sys.stderr)
         return 1
 
 

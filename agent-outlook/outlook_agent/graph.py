@@ -11,7 +11,7 @@ import requests
 GRAPH_URL = "https://graph.microsoft.com/v1.0"
 # Sans le corps : il n'est téléchargé que pour les mails à analyser (get_body).
 LIST_FIELDS = "id,subject,from,receivedDateTime,hasAttachments,importance,categories,flag"
-PAGE_SIZE = 25
+PAGE_SIZE = 200  # liste légère (sans corps) : peu de requêtes même pour une grosse boîte
 RETRY_STATUS = (429, 500, 502, 503, 504)
 MAX_ATTEMPTS = 5
 
