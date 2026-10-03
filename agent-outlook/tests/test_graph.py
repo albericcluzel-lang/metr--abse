@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 import pytest
 import requests
 
@@ -62,12 +64,13 @@ def test_inbox_listing_is_lazy_and_follows_pagination():
 
 def test_inbox_listing_uses_stable_ids_and_does_not_download_bodies():
     client, session = make_client([FakeResponse(payload={"value": []})])
-    list(client.iter_inbox_messages(since_days=2))
+    paris = timezone(timedelta(hours=2))
+    list(client.iter_inbox_messages(since=datetime(2026, 10, 3, 10, 0, tzinfo=paris)))
     call = session.calls[0]
     assert call["headers"]["Authorization"] == "Bearer jeton"
     assert call["headers"]["Prefer"] == 'IdType="ImmutableId"'
     assert "body" not in call["params"]["$select"].split(",")
-    assert call["params"]["$filter"].startswith("receivedDateTime ge ")
+    assert call["params"]["$filter"] == "receivedDateTime ge 2026-10-03T08:00:00Z"  # converti en UTC
 
 
 def test_get_body_asks_for_plain_text():

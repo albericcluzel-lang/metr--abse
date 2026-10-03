@@ -23,7 +23,7 @@ Règles complémentaires :
 - Un mail où une action est attendue de votre part reçoit en plus la catégorie « Action requise ».
 - **Dans le doute, l'agent ne range pas** : sous le seuil de confiance (0,6 par défaut) le mail reste dans la boîte de réception avec la catégorie « À vérifier ».
 - Les invitations et réponses de réunion ne sont pas touchées.
-- Un mail déjà traité n'est jamais analysé deux fois. Un mail qui échoue 3 fois de suite (illisible, refusé par l'IA) est laissé tel quel.
+- Un mail déjà traité n'est jamais analysé deux fois. Un mail qui échoue sans cesse (illisible, refusé par l'IA) est laissé de côté après 3 échecs sur au moins 24 h, en boîte de réception avec la catégorie « À vérifier ». Une panne passagère ne suffit donc pas à faire abandonner un mail.
 - L'agent ne retire jamais une catégorie que vous avez posée vous-même.
 
 ## Mise en place
@@ -97,14 +97,16 @@ Les mails annulés ne sont pas ré-analysés ensuite. Pour les reclasser après 
 Le plus simple est une tâche planifiée sur votre PC (il doit être allumé). Windows, toutes les 15 minutes :
 
 ```
-schtasks /Create /SC MINUTE /MO 15 /TN "Agent Outlook" /TR "cmd /c cd /d C:\chemin\vers\agent-outlook && .venv\Scripts\python.exe -m outlook_agent run --apply --since-days 2"
+schtasks /Create /SC MINUTE /MO 15 /TN "Agent Outlook" /TR "cmd /c cd /d C:\chemin\vers\agent-outlook && .venv\Scripts\python.exe -m outlook_agent run --apply"
 ```
 
 Mac/Linux (cron) :
 
 ```
-*/15 * * * * cd ~/agent-outlook && .venv/bin/python -m outlook_agent run --apply --since-days 2
+*/15 * * * * cd ~/agent-outlook && .venv/bin/python -m outlook_agent run --apply
 ```
+
+L'agent retient où il en est : après un passage complet, il ne relit que les mails arrivés depuis, avec une marge d'un jour. Un PC éteint tout un week-end ne fait donc rien manquer. Les 50 mails par passage (`--limit`) sont un plafond : s'il y en a plus, le reste est traité aux passages suivants.
 
 Une tâche planifiée ne se reconnecte jamais seule : si Microsoft demande une nouvelle connexion (jeton expiré, politique de sécurité), elle s'arrête avec un message ; relancez `login`. De même, si la clé OpenAI est refusée, le crédit épuisé ou le réseau coupé, le passage s'arrête dès la première erreur, avec un message clair. Deux passages ne peuvent pas tourner en même temps : si la tâche planifiée tourne déjà, un lancement manuel l'indique et s'arrête.
 

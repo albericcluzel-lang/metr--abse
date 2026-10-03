@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Callable, Iterator
 from urllib.parse import quote
 
@@ -89,12 +89,12 @@ class GraphClient:
 
     # --- Messages ------------------------------------------------------------
 
-    def iter_inbox_messages(self, since_days: int | None = None) -> Iterator[dict]:
-        """Mails de la boîte de réception, du plus récent au plus ancien, sans leur corps."""
+    def iter_inbox_messages(self, since: datetime | None = None) -> Iterator[dict]:
+        """Mails de la boîte de réception (reçus depuis `since`), du plus récent au plus ancien, sans corps."""
         params = {"$top": PAGE_SIZE, "$select": LIST_FIELDS, "$orderby": "receivedDateTime desc"}
-        if since_days is not None:
-            since = datetime.now(timezone.utc) - timedelta(days=since_days)
-            params["$filter"] = f"receivedDateTime ge {since.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        if since is not None:
+            utc = since.astimezone(timezone.utc)
+            params["$filter"] = f"receivedDateTime ge {utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
         return self._pages(f"{GRAPH_URL}/me/mailFolders/inbox/messages", params)
 
     def get_body(self, message_id: str) -> str:

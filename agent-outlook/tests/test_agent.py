@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +27,8 @@ def raw_mail(mail_id, subject="Sujet", body="Corps du mail", **extra):
         "id": mail_id,
         "subject": subject,
         "from": {"emailAddress": {"name": "Jean Dupont", "address": "jean@exemple.fr"}},
-        "receivedDateTime": "2026-10-03T08:00:00Z",
+        # Daté de maintenant : reste dans la fenêtre relue après le point de reprise, quel que soit le jour.
+        "receivedDateTime": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "body": {"contentType": "text", "content": body},
         "hasAttachments": False,
         "importance": "normal",
@@ -54,6 +56,7 @@ class FakeMailbox:
         }
         self.location = {m["id"]: "inbox" for m in messages}
         self.folder_names = {"inbox": "Boîte de réception"}
+        self.listed_since = []
 
     def add(self, message):
         self.messages.append(message)
@@ -61,8 +64,11 @@ class FakeMailbox:
                                        "flag": dict(message.get("flag", {}))}
         self.location[message["id"]] = "inbox"
 
-    def iter_inbox_messages(self, since_days=None):
+    def iter_inbox_messages(self, since=None):
+        self.listed_since.append(since)
         for message in self.messages:
+            if since and datetime.fromisoformat(message["receivedDateTime"]) < since:
+                continue
             self.events.append(("list", message["id"]))
             yield message
 
@@ -383,30 +389,89 @@ def test_failed_move_keeps_track_of_agent_labels_for_the_retry(tmp_path):
     assert mailbox.current["1"]["categories"] == ["Perso", "Fournisseurs"]
 
 
-def test_a_mail_that_keeps_failing_is_set_aside_after_three_tries(tmp_path):
-    agent, mailbox = make_agent(tmp_path, [raw_mail("bad")], [])
-
-    def classify(mail):
-        if mail.id == "bad":
-            raise RuntimeError("refusé par le filtre")
-        return verdict()
-
-    agent.classify = classify
+def test_a_mail_that_keeps_failing_is_set_aside_even_when_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(StateStore, "GIVE_UP_AFTER", timedelta(0))
+    agent, mailbox = make_agent(tmp_path, [raw_mail("bad")], [RuntimeError("refusé par le filtre")] * 3)
     agent.run(apply=False, limit=10)  # une simulation ne compte pas
     for attempt in range(3):
-        mailbox.add(raw_mail(f"nouveau-{attempt}"))  # d'autres mails réussissent dans chaque passage
         report = agent.run(apply=True, limit=10)
-        bad = next(o for o in report.outcomes if o.mail.id == "bad")
-        assert ("laissé de côté" in bad.error) == (attempt == 2)
+        assert ("laissé de côté" in report.errors[0].error) == (attempt == 2)
     assert mailbox.current["bad"]["categories"] == ["À vérifier"]
-    assert agent.run(apply=True, limit=10).skipped_seen == 4
+    assert agent.run(apply=True, limit=10).skipped_seen == 1
+
+    agent.undo(apply=True)  # la catégorie posée en le laissant de côté s'annule comme le reste
+    assert mailbox.current["bad"]["categories"] == []
 
 
-def test_failures_during_a_general_outage_do_not_count(tmp_path):
-    agent, _ = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")], [RuntimeError("OpenAI en panne")] * 10)
-    for _ in range(5):  # rien ne réussit : ce sont les services qui sont en panne, pas les mails
+def test_quick_repeated_failures_do_not_set_a_mail_aside(tmp_path):
+    # Panne ou saturation passagère : 3 échecs en quelques minutes ne suffisent pas.
+    state = StateStore(tmp_path / "state.json")
+    start = datetime(2026, 10, 3, 9, 0)
+    assert not state.record_failure("1", now=start)
+    assert not state.record_failure("1", now=start + timedelta(minutes=15))
+    assert not state.record_failure("1", now=start + timedelta(minutes=30))
+    assert state.record_failure("1", now=start + timedelta(hours=24))
+
+
+def test_failures_at_the_move_step_are_counted_too(tmp_path, monkeypatch):
+    monkeypatch.setattr(StateStore, "GIVE_UP_AFTER", timedelta(0))
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()] * 3)
+    mailbox.move_message = failing("ErrorMoveCopyFailed")
+    for attempt in range(3):
         report = agent.run(apply=True, limit=10)
-    assert len(report.outcomes) == 2 and not any("laissé de côté" in o.error for o in report.outcomes)
+        assert ("laissé de côté" in report.errors[0].error) == (attempt == 2)
+
+
+def test_run_stops_after_several_errors_in_a_row(tmp_path):
+    messages = [raw_mail(str(i)) for i in range(8)]
+    agent, _ = make_agent(tmp_path, messages, [RuntimeError("OpenAI surchargé")] * 8)
+    report = agent.run(apply=True, limit=10)
+    assert len(report.outcomes) == 5 and "5 erreurs de suite" in report.aborted
+
+
+def test_categories_are_reread_just_before_writing(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [])
+
+    def slow_classify(mail):
+        mailbox.current["1"]["categories"].append("Client X")  # ajouté pendant le passage
+        return verdict()
+
+    agent.classify = slow_classify
+    agent.run(apply=True, limit=10)
+    assert mailbox.current["1"]["categories"] == ["Client X", "Chantier"]
+
+
+def test_reading_resumes_where_the_last_complete_run_stopped(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1")], [verdict()] * 3)
+    agent.run(apply=True, limit=10)
+    assert mailbox.listed_since == [None]  # premier passage : toute la boîte
+    watermark = agent.state.watermark()
+    assert watermark is not None
+
+    agent.run(apply=True, limit=10)
+    assert mailbox.listed_since[-1] == watermark - timedelta(days=1)  # ensuite : depuis le dernier passage
+
+    agent.run(apply=False, limit=10, reprocess=True)  # re-classement explicite : toute la boîte
+    assert mailbox.listed_since[-1] is None
+    assert StateStore(tmp_path / "state.json").watermark() is not None
+
+
+@pytest.mark.parametrize("situation", ["limite atteinte", "erreur"])
+def test_resume_point_does_not_move_while_mails_are_left(tmp_path, situation):
+    messages = [raw_mail("1"), raw_mail("2")]
+    verdicts = [verdict()] if situation == "limite atteinte" else [verdict(), RuntimeError("panne")]
+    agent, _ = make_agent(tmp_path, messages, verdicts)
+    agent.run(apply=True, limit=1 if situation == "limite atteinte" else 10)
+    assert agent.state.watermark() is None
+
+
+def test_explicit_since_days_reads_that_window(tmp_path):
+    old = raw_mail("ancien", receivedDateTime="2020-01-01T08:00:00+00:00")
+    recent = raw_mail("récent", receivedDateTime=datetime.now(timezone.utc).isoformat())
+    agent, mailbox = make_agent(tmp_path, [old, recent], [verdict()])
+    report = agent.run(apply=True, limit=10, since_days=2)
+    assert [o.mail.id for o in report.outcomes] == ["récent"]
+    assert agent.state.watermark() is None  # fenêtre choisie à la main : pas de point de reprise
 
 
 def test_state_is_written_after_each_mail(tmp_path):
@@ -516,6 +581,26 @@ def test_undo_of_an_older_run_waits_for_the_newer_one(tmp_path):
     agent.undo(apply=True)  # le plus récent d'abord
     assert agent.undo(apply=True, run_id=first)[0].restored
     assert mailbox.current["1"]["categories"] == []
+
+
+def test_undo_of_an_older_run_is_not_blocked_by_a_mail_already_restored_from_a_newer_one(tmp_path):
+    agent, mailbox = make_agent(tmp_path, [raw_mail("1"), raw_mail("2")],
+                                [verdict(confidence=0.2)] * 2 + [verdict("chantier")] * 2)
+    first = agent.run(apply=True, limit=10).run_id
+    agent.run(apply=True, limit=10, reprocess=True)
+
+    original = mailbox.get_message
+
+    def get_message(message_id):
+        if message_id == "2":
+            raise RuntimeError("Graph indisponible")
+        return original(message_id)
+
+    mailbox.get_message = get_message
+    agent.undo(apply=True)  # passage récent : mail 1 remis, mail 2 en erreur
+    items = {item.entry["id"]: item for item in agent.undo(apply=False, run_id=first)}
+    assert items["1"].error is None  # plus bloqué
+    assert "plus récent" in items["2"].error
 
 
 def test_undo_of_an_already_undone_run_does_nothing(tmp_path):
