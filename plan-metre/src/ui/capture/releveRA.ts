@@ -83,6 +83,7 @@ export type ActionRA =
   | { type: 'terminer-zone' }
   | { type: 'nouvelle-zone' }
   | { type: 'ajuster-angles'; corrections: readonly { id: number; point: Point3 }[] }
+  | { type: 'rupture-repere'; message: string | null }
   | { type: 'signaler'; message: string }
   | { type: 'effacer-message' }
   | { type: 'reinitialiser' };
@@ -242,6 +243,11 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
       if (angles === etat.angles && !zonesChangees) return etat;
       return { ...etat, angles, zones: zonesChangees ? zones : etat.zones };
     }
+    case 'rupture-repere':
+      // Le suivi a changé de repère : on repart d'une pièce vide. Les zones
+      // déjà gardées l'ont été ailleurs ; les identifiants continuent (ancres
+      // encore en cours de création pour les anciens angles).
+      return { ...etatInitialRA(), prochainId: etat.prochainId, message: action.message };
     case 'signaler':
       return { ...etat, message: action.message };
     case 'effacer-message':

@@ -162,6 +162,7 @@ async function demarrer() {
     surAjustement: vi.fn(),
     surFin: vi.fn(),
     surVisibilite: vi.fn(),
+    surRuptureRepere: vi.fn(),
   };
   const racine = new EventTarget() as unknown as HTMLElement;
   const ra = await SessionRA.demarrer(racine, rappels as unknown as RappelsSessionRA);
@@ -291,5 +292,25 @@ describe('ancres', () => {
     // Les ancres ne sont supprimées qu'avec la session.
     await ra.terminer();
     expect(session.ancres.every((a) => a.supprimee)).toBe(true);
+  });
+});
+
+describe('rupture du repère', () => {
+  it('l’événement « reset » de l’espace de référence est signalé, et le sol repéré oublié', async () => {
+    const { ra, session, rendu, rappels } = await demarrer();
+    ra.dessiner(etatInitialRA());
+    rendu.imageSession(image(session, { oeil: OEIL, cible: p(1, -1.5), resultats: [{ position: p(1, -1.5) }] }));
+    expect(ra.visee).not.toBeNull();
+
+    session.espaceLocal.dispatchEvent(new Event('reset'));
+    expect(rappels.surRuptureRepere).toHaveBeenCalledTimes(1);
+    expect(ra.visee).toBeNull();
+    // Le sol vu avant la rupture n'est plus dans le même repère : pas de point estimé.
+    rendu.imageSession(image(session, { oeil: OEIL, cible: p(2, -3), resultats: [] }));
+    expect(ra.visee).toBeNull();
+
+    await ra.terminer();
+    session.espaceLocal.dispatchEvent(new Event('reset'));
+    expect(rappels.surRuptureRepere).toHaveBeenCalledTimes(1);
   });
 });

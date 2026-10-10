@@ -225,6 +225,13 @@ describe('messages', () => {
     const vide = etatInitialRA();
     expect(reduireRA(vide, { type: 'effacer-message' })).toBe(vide);
   });
+  it('rupture du repère : pièce vide, identifiants poursuivis, message', () => {
+    const e = jouer([...rectangle, { type: 'fermer' }, { type: 'saisir-hauteur', hauteur: 250 }, { type: 'terminer-zone' }, { type: 'nouvelle-zone' }, placer(5, 0)]);
+    const r = reduireRA(e, { type: 'rupture-repere', message: 'Le suivi a perdu ses repères.' });
+    expect(r).toMatchObject({ etape: 'angles', angles: [], zones: [], hauteur: null, message: 'Le suivi a perdu ses repères.' });
+    expect(reduireRA(r, placer(0, 0)).angles[0].id).toBe(e.prochainId);
+  });
+
   it('repart de zéro pour une nouvelle session', () => {
     expect(jouer([...rectangle, { type: 'reinitialiser' }])).toEqual(etatInitialRA());
   });

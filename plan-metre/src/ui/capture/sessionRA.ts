@@ -78,6 +78,12 @@ export interface RappelsSessionRA {
   surFin(interrompue: boolean): void;
   /** La session passe au second plan (dialogue système) ou revient. */
   surVisibilite(visible: boolean): void;
+  /**
+   * Le suivi a déplacé l'origine du repère (événement « reset », par exemple
+   * après une longue perte du suivi) : les positions déjà relevées ne sont plus
+   * comparables aux nouvelles visées.
+   */
+  surRuptureRepere(): void;
 }
 
 function erreurNommee(nom: string, message: string): Error {
@@ -136,6 +142,8 @@ export class SessionRA {
   private readonly ancresDemandees = new Map<number, Point3>();
   private readonly ancresEnCours = new Set<number>();
   private ancresPossibles: boolean;
+  /** Espace de référence du relevé (celui de three.js), écouté pour « reset ». */
+  private readonly espace: XRReferenceSpace | null;
   private finDemandee = false;
   private nettoye = false;
   /** La surimpression DOM est affichée (sinon : touchers seulement). */
@@ -191,6 +199,8 @@ export class SessionRA {
     session.addEventListener('select', this.surSelect);
     session.addEventListener('visibilitychange', this.surChangementVisibilite);
     racine.addEventListener('beforexrselect', this.surAvantSelection);
+    this.espace = renderer.xr.getReferenceSpace();
+    this.espace?.addEventListener('reset', this.surReset);
   }
 
   /**
@@ -517,6 +527,13 @@ export class SessionRA {
     this.rappels.surVisibilite(this.session.visibilityState === 'visible');
   };
 
+  private readonly surReset = () => {
+    if (this.nettoye) return;
+    this.dernierSol = null;
+    this.pointVise = null;
+    this.rappels.surRuptureRepere();
+  };
+
   private readonly surFinSession = () => {
     if (this.nettoye) return;
     this.nettoyer();
@@ -541,6 +558,7 @@ export class SessionRA {
     this.session.removeEventListener('select', this.surSelect);
     this.session.removeEventListener('visibilitychange', this.surChangementVisibilite);
     this.racine.removeEventListener('beforexrselect', this.surAvantSelection);
+    this.espace?.removeEventListener('reset', this.surReset);
     this.scene.clear();
     for (const g of [...this.geometries, ...this.geometriesZones]) g.dispose();
     for (const m of this.materiaux) m.dispose();

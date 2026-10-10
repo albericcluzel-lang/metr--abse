@@ -186,6 +186,10 @@ async function simulerSessionRA(page: Page) {
         ajuster(corrections: unknown) {
           rappels.surAjustement(corrections);
         },
+        /** Événement « reset » de l'espace de référence. */
+        rupture() {
+          rappels.surRuptureRepere();
+        },
       };
       return session;
     };
@@ -366,4 +370,54 @@ test('réalité augmentée (session simulée) : chaque zone terminée est proté
   await expect(zones).toHaveCount(1);
   await expect(zones.first()).toContainText('12,30 m²');
   await expect(zones.first()).toContainText('Réalité augmentée');
+});
+
+test('réalité augmentée (session simulée) : après une rupture du repère, les pièces suivantes sont placées à part', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'RA rupture');
+  await page.goto(`./#/chantier/${id}/releve`);
+  const viser = await demarrerSessionRA(page);
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await page.getByRole('button', { name: 'Relever une autre pièce' }).click();
+  // Deux angles posés, puis le suivi déplace son repère.
+  for (const [x, z] of [
+    [4.1, 0],
+    [7, 0],
+  ]) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  await page.evaluate(() => (window as any).__ra.rupture());
+  await expect(page.getByRole('alert')).toContainText('Le suivi a perdu ses repères.');
+  await expect(page.getByRole('alert')).toContainText('2 angles de la pièce en cours n’ont pas pu être gardés');
+  await expect(page.getByText('Aucun angle placé')).toBeVisible();
+
+  // La pièce suivante, relevée dans le nouveau repère (origine déplacée de 20 m).
+  await releverPieceRA(page, viser, [
+    [20, 20],
+    [23, 20],
+    [23, 22],
+    [20, 22],
+  ]);
+  await expect(page.getByText('Zone 2 terminée')).toBeVisible();
+  const brouillon = await lireBrouillon(page, id);
+  expect(brouillon?.zones).toHaveLength(2);
+  expect(brouillon!.zones[0].sessionRA).not.toBe(brouillon!.zones[1].sessionRA);
+
+  await page.getByRole('button', { name: 'Quitter' }).first().click();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await page.getByRole('button', { name: 'Sauvegarder et continuer' }).click();
+  const { pieces } = await piecesRdc(page);
+  expect(pieces).toHaveLength(2);
+  // Deux groupes distincts : ils ne gardent pas l'écart (faux) de 16 m entre les deux repères.
+  const [a, b] = pieces.map((p) => boite(p.sommets));
+  const ecart = Math.max(b.minX - a.maxX, a.minX - b.maxX, b.minY - a.maxY, a.minY - b.maxY);
+  expect(ecart).toBeGreaterThanOrEqual(99);
+  expect(ecart).toBeLessThan(200);
 });

@@ -32,7 +32,8 @@ function pluriel(n: number, mot: string): string {
   return `${n} ${mot}${n > 1 ? 's' : ''}`;
 }
 
-function consigne(etat: EtatRA, visee: Visee): { titre: string; texte: string } {
+/** `zonesAnterieures` : zones de la session terminées avant une rupture du repère. */
+function consigne(etat: EtatRA, visee: Visee, zonesAnterieures: number): { titre: string; texte: string } {
   const n = etat.angles.length;
   switch (etat.etape) {
     case 'angles':
@@ -51,7 +52,7 @@ function consigne(etat: EtatRA, visee: Visee): { titre: string; texte: string } 
       return { titre: 'Hauteur sous plafond', texte: 'Visez la jonction mur / plafond puis touchez Mesurer la hauteur.' };
     case 'zone-terminee':
       return {
-        titre: `Zone ${etat.zones.length} terminée`,
+        titre: `Zone ${zonesAnterieures + etat.zones.length} terminée`,
         texte: 'Relevez une autre pièce sans quitter : elle gardera sa position par rapport aux précédentes.',
       };
   }
@@ -89,6 +90,9 @@ export function EcranRA({
   const [saisieHauteur, setSaisieHauteur] = useState(false);
   const [hauteurSaisie, setHauteurSaisie] = useState(hauteurDefaut);
   const [confirmerQuitter, setConfirmerQuitter] = useState(false);
+  // Zones de la session gardées avant une rupture du repère (déjà transmises).
+  const [zonesAnterieures, setZonesAnterieures] = useState(0);
+  const zonesAnterieuresRef = useRef(0);
 
   useEffect(() => {
     props.current = { hauteurDefaut, onZones, onTerminer };
@@ -124,17 +128,9 @@ export function EcranRA({
 
   useEffect(() => setConfirmerQuitter(false), [etat.angles, etat.etape]);
 
-  const surFinSession = (interrompue: boolean) => {
-    sessionRef.current = null;
-    if (!monte.current) return;
-    setEnSession(false);
-    setSaisieHauteur(false);
-    setVisible(true);
-    const e = etatRef.current;
-    const bilan = cloturerSession(e, props.current.hauteurDefaut);
-    const zones = zonesDepuisRA(bilan.zones, idSession.current);
+  /** Ce que la clôture de la session a gardé ou perdu de la zone en cours. */
+  const detailsCloture = (e: EtatRA, bilan: ReturnType<typeof cloturerSession>): string[] => {
     const details: string[] = [];
-    if (interrompue) details.push('La session de réalité augmentée s’est interrompue.');
     if (bilan.zoneEnCoursConservee) {
       details.push(
         e.hauteur !== null
@@ -145,12 +141,44 @@ export function EcranRA({
     if (bilan.anglesPerdus > 0) {
       details.push(`${pluriel(bilan.anglesPerdus, 'angle')} de la pièce en cours n’ont pas pu être gardés (pièce incomplète).`);
     }
+    return details;
+  };
+
+  const surFinSession = (interrompue: boolean) => {
+    sessionRef.current = null;
+    if (!monte.current) return;
+    setEnSession(false);
+    setSaisieHauteur(false);
+    setVisible(true);
+    const e = etatRef.current;
+    const bilan = cloturerSession(e, props.current.hauteurDefaut);
+    const zones = zonesDepuisRA(bilan.zones, idSession.current);
+    const details = detailsCloture(e, bilan);
+    if (interrompue) details.unshift('La session de réalité augmentée s’est interrompue.');
     if (zones.length > 0) props.current.onZones(idSession.current, zones);
+    const gardees = zones.length + zonesAnterieuresRef.current;
     // Une nouvelle session aura un autre repère.
     envoyer({ type: 'reinitialiser' });
     idSession.current = nouvelId();
-    if (zones.length > 0) props.current.onTerminer(details.join(' ') || null);
+    zonesAnterieuresRef.current = 0;
+    setZonesAnterieures(0);
+    if (gardees > 0) props.current.onTerminer(details.join(' ') || null);
     else if (details.length > 0) setErreur(details.join(' '));
+  };
+
+  // Le suivi a déplacé son repère : ce qui est relevé est gardé tel quel
+  // (zone en cours comprise si elle forme une pièce), et la suite part dans
+  // un nouveau groupe, placé à part sur le plan.
+  const surRuptureRepere = () => {
+    const e = etatRef.current;
+    const bilan = cloturerSession(e, props.current.hauteurDefaut);
+    if (bilan.zones.length > 0) props.current.onZones(idSession.current, zonesDepuisRA(bilan.zones, idSession.current));
+    idSession.current = nouvelId();
+    zonesAnterieuresRef.current += bilan.zones.length;
+    setZonesAnterieures(zonesAnterieuresRef.current);
+    const details = ['Le suivi a perdu ses repères.', ...detailsCloture(e, bilan)];
+    if (zonesAnterieuresRef.current > 0) details.push('Les pièces relevées ensuite seront placées à part sur le plan.');
+    envoyer({ type: 'rupture-repere', message: details.join(' ') });
   };
 
   const surToucherEcran = (point: Point3 | null) => {
@@ -179,6 +207,7 @@ export function EcranRA({
       surAjustement: (corrections) => envoyer({ type: 'ajuster-angles', corrections }),
       surFin: surFinSession,
       surVisibilite: setVisible,
+      surRuptureRepere,
     })
       .then((s) => {
         if (!monte.current) {
@@ -239,7 +268,7 @@ export function EcranRA({
   };
 
   const infos = infosVisee(etat, visee.point);
-  const { titre, texte } = consigne(etat, visee);
+  const { titre, texte } = consigne(etat, visee, zonesAnterieures);
   const derniereZone = etat.zones[etat.zones.length - 1];
 
   return (
@@ -405,7 +434,7 @@ export function EcranRA({
             {etat.etape === 'zone-terminee' && derniereZone && (
               <>
                 <p className="releve-ra-statut">
-                  {`Zone ${etat.zones.length} : ${formaterValeur(aireAnglesM2(derniereZone.angles), 'm²')} · hauteur ${derniereZone.hauteur} cm`}
+                  {`Zone ${zonesAnterieures + etat.zones.length} : ${formaterValeur(aireAnglesM2(derniereZone.angles), 'm²')} · hauteur ${derniereZone.hauteur} cm`}
                 </p>
                 <div className="releve-ra-rangee deux">
                   <Bouton variante="contour" onClick={quitter}>
