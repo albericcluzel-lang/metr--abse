@@ -1,0 +1,58 @@
+# Vérifie l'appli « plan-metre » et la publie sur GitHub Pages
+# (https://<compte>.github.io/metr--abse/) à chaque mise à jour de main.
+name: Appli Plan & Métré
+
+on:
+  push:
+    branches: [main]
+    paths: ['plan-metre/**', '.github/workflows/plan-metre.yml']
+  pull_request:
+    paths: ['plan-metre/**', '.github/workflows/plan-metre.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plan-metre-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verifier:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plan-metre
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plan-metre/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Tests dans le navigateur
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        with:
+          path: plan-metre/dist
+
+  publier:
+    needs: verifier
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploiement.outputs.page_url }}
+    steps:
+      - id: deploiement
+        uses: actions/deploy-pages@v4
