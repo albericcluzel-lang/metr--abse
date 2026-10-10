@@ -1,0 +1,369 @@
+/* Accueil : liste des chantiers en cartes, bouton flottant « Nouveau chantier ». */
+
+.accueil-contenu {
+  /* Place pour le bouton flottant sous la dernière carte. */
+  padding-bottom: calc(104px + var(--zone-sure-bas));
+}
+
+.barre-haut .bouton.accueil-importer {
+  padding: 0 12px;
+}
+
+/* ─── Recherche ──────────────────────────────────────────────────────── */
+
+.accueil-recherche {
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--texte-3);
+}
+
+.accueil-recherche input {
+  color: var(--texte);
+}
+
+.accueil-aucun {
+  text-align: center;
+  color: var(--texte-2);
+  padding: 24px 8px;
+}
+
+/* ─── Cartes des chantiers ───────────────────────────────────────────── */
+
+.accueil-liste {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.accueil-carte {
+  /* Pas de overflow: hidden ni de transform : le menu ⋮ doit déborder sur les cartes suivantes. */
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  background: var(--surface);
+  border-radius: var(--rayon);
+  box-shadow: var(--ombre);
+  transition: box-shadow 0.15s;
+}
+
+.accueil-carte:hover {
+  box-shadow: 0 4px 16px rgba(27, 33, 64, 0.14);
+}
+
+.accueil-carte-principal {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 4px 14px 14px;
+  border: none;
+  border-radius: var(--rayon) 0 0 var(--rayon);
+  background: transparent;
+  text-align: left;
+}
+
+.accueil-carte-principal:active .accueil-apercu {
+  background: var(--surface-3);
+}
+
+.accueil-apercu {
+  flex: none;
+  width: 64px;
+  height: 64px;
+  padding: 7px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--texte-3);
+}
+
+.accueil-apercu-vide svg {
+  opacity: 0.6;
+}
+
+.accueil-apercu svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.accueil-apercu polygon {
+  fill: var(--plan-sol);
+  stroke: var(--plan-mur);
+  stroke-width: 1.6px;
+  stroke-linejoin: round;
+}
+
+.accueil-carte-texte {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.accueil-carte-nom,
+.accueil-carte-lieu,
+.accueil-carte-detail {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.accueil-carte-nom {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--texte);
+}
+
+.accueil-carte-lieu {
+  font-size: 14px;
+  color: var(--texte-2);
+}
+
+.accueil-carte-detail {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texte-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.accueil-carte-date {
+  font-size: 12px;
+  color: var(--texte-3);
+}
+
+.accueil-carte-menu {
+  flex: none;
+  padding: 8px 6px 0 0;
+}
+
+/* ─── Bouton flottant ────────────────────────────────────────────────── */
+
+.bouton.accueil-fab {
+  position: fixed;
+  z-index: 30;
+  /* Aligné sur le bord droit de la colonne de contenu (720 px) sur grand écran. */
+  right: max(16px, calc((100vw - 720px) / 2 + 16px));
+  bottom: calc(18px + var(--zone-sure-bas));
+  min-height: 56px;
+  padding: 0 22px 0 18px;
+  border-radius: 18px;
+  font-size: 16px;
+  box-shadow: var(--ombre-forte);
+}
+
+/* ─── État vide ──────────────────────────────────────────────────────── */
+
+.accueil-vide-texte {
+  max-width: 360px;
+  margin: 0 auto 20px;
+}
+
+.accueil-etapes {
+  list-style: none;
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  padding: 0;
+  margin: 0 0 24px;
+}
+
+.accueil-etapes li {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 104px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texte-2);
+}
+
+.accueil-etape-icone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--primaire-clair);
+  color: var(--primaire);
+}
+
+.vide .accueil-etape-icone svg {
+  color: var(--primaire);
+  margin: 0;
+}
+
+.accueil-vide-actions {
+  display: grid;
+  gap: 10px;
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+/* ─── Installation ───────────────────────────────────────────────────── */
+
+.accueil-installation {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 14px 4px 14px 14px;
+  border-radius: var(--rayon);
+  background: var(--primaire-clair);
+  color: var(--texte);
+}
+
+.accueil-installation-logo {
+  flex: none;
+  border-radius: 11px;
+  box-shadow: 0 1px 4px rgba(27, 33, 64, 0.18);
+}
+
+.accueil-installation-texte {
+  flex: 1;
+  min-width: 0;
+}
+
+.accueil-installation h2 {
+  font-size: 16px;
+  margin-bottom: 2px;
+}
+
+.accueil-installation p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--texte-2);
+}
+
+.accueil-installation .bouton {
+  margin-top: 10px;
+  padding: 6px 18px;
+  white-space: normal;
+  text-align: left;
+}
+
+.accueil-installation p.accueil-installation-aide {
+  margin-top: 8px;
+  color: var(--primaire-fonce);
+}
+
+.accueil-installation .bouton-icone {
+  margin-top: -8px;
+  color: var(--texte-2);
+}
+
+/* ─── Encart « données sur l'appareil » ──────────────────────────────── */
+
+.accueil-encart {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  margin-top: 24px;
+  padding: 12px 14px;
+  border-radius: var(--rayon-petit);
+  background: var(--surface-2);
+  color: var(--texte-2);
+  font-size: 13px;
+}
+
+.accueil-encart svg {
+  flex: none;
+  color: var(--texte-3);
+  margin-top: 1px;
+}
+
+.accueil-encart p {
+  margin: 0;
+}
+
+.accueil-encart-espace {
+  display: block;
+  margin-top: 4px;
+  color: var(--texte-3);
+}
+
+/* ─── Formulaires (création, import) ─────────────────────────────────── */
+
+.accueil-champ-erreur .saisie {
+  border-color: var(--danger);
+}
+
+.accueil-champ-erreur .champ-aide {
+  color: var(--danger);
+}
+
+.accueil-import-attente {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 0 24px;
+  color: var(--texte-2);
+}
+
+.accueil-roue {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 3px solid var(--primaire-clair);
+  border-top-color: var(--primaire);
+  animation: accueil-tourner 0.8s linear infinite;
+}
+
+@keyframes accueil-tourner {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accueil-roue {
+    animation-duration: 2.4s;
+  }
+}
+
+.accueil-import-erreur {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+  padding: 14px;
+  border-radius: var(--rayon-petit);
+  background: var(--danger-clair);
+  color: var(--danger);
+}
+
+.accueil-import-erreur svg {
+  flex: none;
+}
+
+.accueil-import-erreur p {
+  margin: 0 0 4px;
+  color: var(--texte);
+}
+
+.accueil-import-texte {
+  margin: 0 0 16px;
+  color: var(--texte-2);
+}
+
+.accueil-import-texte strong {
+  color: var(--texte);
+}
+
+.accueil-import-choix {
+  display: grid;
+  gap: 6px;
+}
+
+.accueil-import-choix .champ-aide {
+  margin: 0 6px 10px;
+}
