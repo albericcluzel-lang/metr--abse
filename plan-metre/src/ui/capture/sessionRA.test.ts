@@ -249,3 +249,17 @@ describe('surface surélevée', () => {
     expect(ra.visee?.y).toBeCloseTo(SOL, 3);
   });
 });
+
+describe('premier angle', () => {
+  it('le plan du sol déjà repéré sert de repli dès le premier angle', async () => {
+    const { ra, session, rendu, rappels } = await demarrer();
+    ra.dessiner(etatInitialRA());
+    // Le sol est vu au milieu de la pièce…
+    rendu.imageSession(image(session, { oeil: OEIL, cible: p(1, -1.5), resultats: [{ position: p(1, -1.5) }] }));
+    attendreProche(ra.visee, p(1, -1.5));
+    // … puis on vise l'angle, où le plan détecté ne va pas.
+    rendu.imageSession(image(session, { oeil: OEIL, cible: p(2, -3), resultats: [] }));
+    attendreProche(ra.visee, p(2, -3));
+    expect(rappels.surVisee).toHaveBeenLastCalledWith(expect.objectContaining({ estime: true }));
+  });
+});

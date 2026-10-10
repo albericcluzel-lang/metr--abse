@@ -126,6 +126,8 @@ export class SessionRA {
   private fermeDessine = false;
   private zonesDessinees: readonly ZoneTermineeRA[] | null = null;
   private pointVise: Point3 | null = null;
+  /** Altitude (m) du dernier sol touché : repli de la visée avant le premier angle. */
+  private dernierSol: number | null = null;
   private derniereVisee = { t: 0, present: false, suivi: false, estime: false };
   private derniersAjustements = 0;
   private readonly ancres = new Map<number, XRAnchor>();
@@ -329,7 +331,8 @@ export class SessionRA {
         const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
         rayon = { origine: { x: o.x, y: o.y, z: o.z }, direction: { x: dir.x, y: dir.y, z: dir.z } };
       }
-      vise = viseeSol(resultats, sol, rayon, etat ? altitudeAngles(etat.angles) : null);
+      vise = viseeSol(resultats, sol ?? this.dernierSol, rayon, etat ? altitudeAngles(etat.angles) : null);
+      if (vise?.matrice) this.dernierSol = vise.point.y;
     }
     const point = vise?.point ?? null;
     const matrice = vise?.matrice ?? null;
