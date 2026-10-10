@@ -1,0 +1,207 @@
+/* Réglages du chantier : sections en cartes, lignes compactes pour le catalogue. */
+
+.reglages > section:first-child .titre-section {
+  margin-top: 4px;
+}
+
+.reglages-texte {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: var(--texte-2);
+}
+
+.reglages-note {
+  margin: 8px 4px 0;
+  font-size: 13px;
+  color: var(--texte-3);
+}
+
+.reglages-detail {
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.reglages-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+/* ─── Champs ─────────────────────────────────────────────────────────── */
+
+.reglages-champ-erreur .champ-aide,
+.reglages-erreur {
+  color: var(--danger);
+}
+
+.reglages-compact {
+  min-width: 0;
+}
+
+.reglages-erreur {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.saisie.reglages-saisie-compacte {
+  min-height: 44px;
+  padding: 0 10px;
+}
+
+.saisie.reglages-saisie-compacte input {
+  min-height: 42px;
+}
+
+.reglages-nombre input {
+  text-align: right;
+}
+
+/* ─── Niveaux ────────────────────────────────────────────────────────── */
+
+.reglages-niveaux {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.reglages-niveaux .carte + .carte {
+  margin-top: 0;
+}
+
+.reglages-niveau.carte {
+  padding: 14px 10px 8px 14px;
+}
+
+.reglages-niveau-champs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 136px;
+  gap: 0 12px;
+  padding-right: 4px;
+}
+
+.reglages-niveau-champs .champ {
+  margin-bottom: 6px;
+}
+
+.reglages-niveau-pied {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.reglages-niveau-pied .reglages-detail {
+  flex: 1;
+  min-width: 0;
+}
+
+.reglages-monter svg {
+  transform: rotate(180deg);
+}
+
+.reglages-niveau-pied .bouton-icone,
+.reglages-lignes .bouton-icone {
+  color: var(--texte-2);
+}
+
+.reglages .bouton.reglages-supprimer-renove {
+  margin: 0 0 2px -12px;
+  color: var(--danger);
+}
+
+.reglages .bouton.reglages-ajouter-ligne {
+  margin-left: -10px;
+}
+
+.bouton.reglages-ajouter {
+  margin-top: 12px;
+}
+
+/* ─── Catalogue ──────────────────────────────────────────────────────── */
+
+.carte.reglages-catalogue {
+  padding: 10px 10px 8px 14px;
+}
+
+.reglages-entetes {
+  padding: 0 2px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texte-3);
+}
+
+.reglages-lignes {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+}
+
+.reglages-lignes > li {
+  padding: 6px 0;
+}
+
+.reglages-lignes > li + li {
+  border-top: 1px solid var(--bordure);
+}
+
+.reglages-grille-murs {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px 44px;
+  gap: 4px 8px;
+  align-items: start;
+}
+
+.reglages-grille-sols {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  gap: 4px 10px;
+  align-items: start;
+}
+
+.reglages-note-ligne {
+  grid-column: 1 / 3;
+  padding-left: 2px;
+  font-size: 12px;
+  color: var(--texte-3);
+}
+
+.reglages-grille-sols .reglages-note-ligne {
+  grid-column: 2 / 3;
+}
+
+.reglages-couleur {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon-petit);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.reglages-couleur::-webkit-color-swatch-wrapper {
+  padding: 5px;
+}
+
+.reglages-couleur::-webkit-color-swatch {
+  border: none;
+  border-radius: 6px;
+}
+
+.reglages-couleur::-moz-color-swatch {
+  border: none;
+  border-radius: 6px;
+}
+
+/* ─── Zone sensible ──────────────────────────────────────────────────── */
+
+.titre-section.reglages-titre-danger {
+  color: var(--danger);
+}
+
+.carte.reglages-danger {
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+  box-shadow: none;
+}
