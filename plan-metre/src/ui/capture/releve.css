@@ -1,0 +1,807 @@
+/* Module « relevé de pièces » : choix de la méthode, zones, mètre laser,
+   pièce rectangulaire, finalisation, réalité augmentée (surimpression). */
+
+.releve-intro {
+  color: var(--texte-2);
+  margin: 4px 4px 14px;
+  font-weight: 500;
+}
+
+.releve-astuce,
+.releve-consigne {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 14px 2px;
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.releve-astuce svg,
+.releve-consigne svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--primaire);
+}
+
+.releve-message {
+  margin: -6px 0 12px;
+  padding: 8px 12px;
+  border-radius: var(--rayon-petit);
+  background: var(--danger-clair);
+  color: var(--danger);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.releve-erreur {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border-radius: var(--rayon);
+  background: var(--danger-clair);
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.releve-erreur svg {
+  flex: none;
+}
+
+/* Pied fixe (actions principales), au-dessus de la zone sûre. */
+.releve-pied {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px calc(12px + var(--zone-sure-bas));
+  background: var(--surface);
+  border-top: 1px solid var(--bordure);
+}
+
+.releve-pied > .bouton {
+  width: 100%;
+}
+
+@media (min-width: 760px) {
+  .releve-pied {
+    padding-left: max(16px, calc((100% - 688px) / 2));
+    padding-right: max(16px, calc((100% - 688px) / 2));
+  }
+  .releve-pied-double {
+    flex-direction: row;
+  }
+  .releve-pied-double > .bouton {
+    flex: 1;
+  }
+}
+
+/* ─── Choix de la méthode ─────────────────────────────────────────────── */
+
+.releve-cartes {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.releve-carte {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 100%;
+  min-height: 88px;
+  padding: 16px;
+  border: 2px solid transparent;
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+  text-align: left;
+  transition: border-color 0.15s, transform 0.05s;
+}
+
+.releve-carte:not([aria-disabled='true']):hover {
+  border-color: var(--primaire-clair);
+}
+
+.releve-carte:not([aria-disabled='true']):active {
+  transform: scale(0.99);
+}
+
+.releve-carte-icone {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: var(--primaire-clair);
+  color: var(--primaire);
+}
+
+.releve-carte-texte {
+  flex: 1;
+  min-width: 0;
+}
+
+.releve-carte-titre {
+  display: block;
+  font-size: 17px;
+  font-weight: 650;
+}
+
+.releve-carte-detail {
+  display: block;
+  margin-top: 3px;
+  font-size: 14px;
+  color: var(--texte-2);
+}
+
+.releve-carte-suivant {
+  flex: none;
+  align-self: center;
+  color: var(--texte-3);
+}
+
+.releve-carte[aria-disabled='true'] {
+  cursor: not-allowed;
+  background: var(--surface-2);
+  box-shadow: none;
+  border-color: var(--bordure);
+}
+
+.releve-carte[aria-disabled='true'] .releve-carte-icone {
+  background: var(--surface-3);
+  color: var(--texte-3);
+}
+
+.releve-carte[aria-disabled='true'] .releve-carte-titre,
+.releve-carte[aria-disabled='true'] .releve-carte-detail {
+  color: var(--texte-2);
+}
+
+.releve-carte-raison {
+  display: block;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--bordure);
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.releve-carte-raison strong {
+  color: var(--texte);
+  font-weight: 600;
+}
+
+.releve-carte-liste {
+  display: block;
+  margin: 6px 0;
+}
+
+.releve-carte-liste > span {
+  display: block;
+  position: relative;
+  padding-left: 14px;
+}
+
+.releve-carte-liste > span::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 0.55em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--texte-3);
+}
+
+/* ─── Zones relevées ──────────────────────────────────────────────────── */
+
+.releve-zone {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  padding: 8px 6px 8px 12px;
+}
+
+.releve-zone-vignette {
+  position: relative;
+  flex: none;
+  display: flex;
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.releve-zone-coche {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--surface);
+  background: var(--accent);
+  color: #fff;
+}
+
+.releve-zone-titre {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+}
+
+.releve-zone-surface {
+  font-weight: 650;
+  color: var(--primaire);
+  font-variant-numeric: tabular-nums;
+}
+
+.releve-vignette path {
+  fill: var(--primaire-clair);
+  stroke: var(--primaire);
+  stroke-width: 2.5;
+  stroke-linejoin: round;
+}
+
+/* ─── Aperçus SVG ─────────────────────────────────────────────────────── */
+
+.releve-apercu {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.releve-grille {
+  fill: none;
+  stroke: var(--plan-grille);
+  stroke-width: 1;
+}
+
+.releve-trace {
+  fill: none;
+  stroke: var(--primaire);
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.releve-trace-en-cours {
+  stroke-opacity: 0.45;
+}
+
+.releve-trace-fermeture {
+  stroke: var(--alerte);
+  stroke-width: 2.5;
+  stroke-dasharray: 7 6;
+  stroke-linecap: round;
+}
+
+.releve-cote {
+  font-size: 13px;
+  font-weight: 650;
+  fill: var(--plan-cote);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.releve-cote-fermeture {
+  fill: var(--alerte);
+}
+
+.releve-fleche {
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.releve-fleche-pointe {
+  fill: var(--accent);
+}
+
+.releve-point-depart {
+  fill: var(--accent);
+  stroke: var(--surface);
+  stroke-width: 2.5;
+}
+
+.releve-point-courant {
+  fill: var(--primaire);
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.releve-piece-existante {
+  fill: var(--surface-2);
+  stroke: var(--plan-mur);
+  stroke-opacity: 0.5;
+  stroke-width: 2;
+}
+
+.releve-piece-nouvelle {
+  fill: color-mix(in srgb, var(--primaire) 14%, transparent);
+  stroke: var(--primaire);
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
+
+.releve-etiquette {
+  font-size: 13px;
+  font-weight: 650;
+  fill: var(--texte);
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3px;
+}
+
+.releve-etiquette-surface {
+  font-weight: 500;
+  fill: var(--texte-2);
+}
+
+.releve-cadre-apercu {
+  position: relative;
+  height: 220px;
+  margin-bottom: 16px;
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+  overflow: hidden;
+}
+
+.releve-apercu-vide {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  color: var(--texte-3);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* ─── Mètre laser ─────────────────────────────────────────────────────── */
+
+.releve-laser {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.releve-laser-apercu {
+  flex: 1;
+  min-height: 130px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--bordure);
+}
+
+.releve-laser-panneau {
+  flex: none;
+  max-height: 72%;
+  overflow-y: auto;
+  padding: 4px 16px calc(12px + var(--zone-sure-bas));
+  background: var(--fond);
+}
+
+.releve-laser-panneau .releve-consigne {
+  margin: 10px 0 4px;
+}
+
+.releve-fermeture {
+  margin: 0 0 10px 26px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--alerte);
+}
+
+.releve-actions-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.releve-actions-2 .bouton {
+  min-height: 48px;
+  padding: 6px 12px;
+  white-space: normal;
+  line-height: 1.15;
+  text-align: center;
+}
+
+.releve-actions-2 .bouton svg {
+  flex: none;
+}
+
+.releve-laser-fin {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.releve-laser-fin .bouton {
+  margin-bottom: 14px;
+  min-height: 46px;
+}
+
+@media (min-width: 760px) {
+  .releve-laser {
+    flex-direction: row;
+  }
+  .releve-laser-apercu {
+    border-bottom: none;
+    border-right: 1px solid var(--bordure);
+  }
+  .releve-laser-panneau {
+    width: 420px;
+    max-height: none;
+    padding-top: 8px;
+  }
+}
+
+/* ─── Finalisation ────────────────────────────────────────────────────── */
+
+.releve-cadre-assemblage {
+  height: 240px;
+}
+
+.releve-apercu-3d {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.releve-apercu-3d > * {
+  flex: 1;
+  min-width: 0;
+}
+
+.releve-entete-apercu {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 2px 0 10px;
+}
+
+.releve-entete-apercu .titre-section {
+  margin: 0 4px;
+}
+
+.releve-entete-apercu .segments button {
+  min-height: 36px;
+}
+
+.releve-carte-zone {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 14px 2px;
+}
+
+.releve-carte-zone-entete {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 64px;
+  padding-top: 22px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.releve-carte-zone-entete .releve-vignette {
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.releve-carte-zone-champs {
+  flex: 1;
+  min-width: 0;
+}
+
+
+/* ─── Réalité augmentée ───────────────────────────────────────────────── */
+
+.releve-ra {
+  height: 100%;
+}
+
+/* Pendant la session, l'élément est affiché par-dessus la caméra. */
+.releve-ra.en-session {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: transparent;
+  color: #fff;
+  font-size: 15px;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.releve-etapes {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+  counter-reset: etape;
+}
+
+.releve-etapes li {
+  position: relative;
+  padding: 12px 14px 12px 54px;
+  margin-bottom: 10px;
+  border-radius: var(--rayon);
+  background: var(--surface);
+  box-shadow: var(--ombre);
+  color: var(--texte-2);
+  counter-increment: etape;
+}
+
+.releve-etapes li strong {
+  color: var(--texte);
+}
+
+.releve-etapes li::before {
+  content: counter(etape);
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primaire-clair);
+  color: var(--primaire);
+  font-weight: 700;
+}
+
+.releve-ra-haut,
+.releve-ra-bas {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: rgba(14, 18, 38, 0.74);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.releve-ra-zone-haut {
+  position: absolute;
+  top: calc(10px + var(--zone-sure-haut));
+  left: 10px;
+  right: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.releve-ra-zone-haut .releve-ra-haut {
+  position: static;
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.releve-ra-consigne {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1.3;
+}
+
+.releve-ra-consigne strong {
+  font-size: 17px;
+}
+
+.releve-ra-consigne span {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.releve-ra-quitter {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: var(--rayon-pilule);
+  background: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+
+.releve-ra-bas {
+  bottom: calc(10px + var(--zone-sure-bas));
+}
+
+.releve-ra-statut {
+  margin: 0 0 10px;
+  text-align: center;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.releve-ra-rangee {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+}
+
+.releve-ra-rangee.deux {
+  grid-template-columns: 1fr 1fr;
+}
+
+.releve-ra-rangee.deux .bouton {
+  white-space: normal;
+  line-height: 1.15;
+}
+
+.releve-ra-bas > .bouton {
+  margin-top: 12px;
+}
+
+.releve-ra-principal {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 112px;
+  height: 112px;
+  border-radius: 50%;
+  border: 4px solid rgba(255, 255, 255, 0.9);
+  background: var(--primaire);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.1;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+.releve-ra-principal:active {
+  transform: scale(0.96);
+}
+
+.releve-ra-secondaire {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 72px;
+  padding: 6px 4px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+.releve-ra-secondaire:disabled {
+  opacity: 0.4;
+}
+
+.releve-ra-fermer.proche {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
+  animation: releve-pulsation 1s ease-in-out infinite;
+}
+
+/* Halo pulsé : la cible ne bouge pas sous le doigt. */
+@keyframes releve-pulsation {
+  50% {
+    box-shadow: 0 0 0 7px rgba(47, 191, 113, 0.55);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .releve-ra-fermer.proche {
+    animation: none;
+  }
+}
+
+.releve-ra-viseur {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  pointer-events: none;
+  background:
+    linear-gradient(#fff, #fff) center / 2px 100% no-repeat,
+    linear-gradient(#fff, #fff) center / 100% 2px no-repeat;
+  opacity: 0.85;
+  filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.8));
+}
+
+.releve-ra-viseur.proche {
+  background:
+    linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat,
+    linear-gradient(var(--accent), var(--accent)) center / 100% 3px no-repeat;
+}
+
+.releve-ra-mesure {
+  position: absolute;
+  left: 50%;
+  bottom: calc(50% + 28px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 14px;
+  background: rgba(14, 18, 38, 0.7);
+  font-size: 26px;
+  font-weight: 750;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.releve-ra-mesure span {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.releve-ra-alerte,
+.releve-ra-message {
+  margin: 0 6px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.releve-ra-alerte {
+  background: rgba(199, 119, 0, 0.94);
+}
+
+.releve-ra-message {
+  background: rgba(208, 59, 59, 0.94);
+}
+
+.releve-ra-saisie {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 8px;
+}
+
+.releve-ra-saisie .champ-libelle {
+  color: #fff;
+}
+
+.releve-ra-saisie .saisie {
+  color: var(--texte);
+}
+
+.releve-ra-saisie .bouton {
+  margin-bottom: 14px;
+}
