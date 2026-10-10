@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const PORT = 4321;
+// Port modifiable (PORT_E2E) pour lancer plusieurs séries de tests en parallèle.
+const PORT = Number(process.env.PORT_E2E ?? 4321);
 
 export default defineConfig({
   testDir: 'e2e',
@@ -20,7 +21,7 @@ export default defineConfig({
   webServer: {
     command: `npx vite --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}/metr--abse/`,
-    reuseExistingServer: true,
+    reuseExistingServer: !process.env.CI,
     timeout: 60_000,
   },
 });
