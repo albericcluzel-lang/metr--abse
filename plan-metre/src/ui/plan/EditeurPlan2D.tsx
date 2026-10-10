@@ -63,7 +63,7 @@ import {
   pieceSousPoint,
   poigneeProche,
   poigneesMilieux,
-  sommetProche,
+  sommetSousPoint,
 } from './touche';
 import { ajusterVue, boitePlan, pincer, versEcran, versPlan, zoomer, type Marges, type Vue } from './vue';
 import './plan2d.css';
@@ -442,7 +442,7 @@ export function EditeurPlan2D() {
     const idActif = pieceActive(e.selection);
     const active = idActif ? pl.pieces.find((p) => p.id === idActif) : undefined;
     if (active) {
-      const i = sommetProche(active.sommets, pp, TOUCHE_SOMMET_PX * k * (tactile ? 1.2 : 1));
+      const i = sommetSousPoint(active.sommets, pp, TOUCHE_SOMMET_PX * k * (tactile ? 1.2 : 1));
       if (i >= 0) return { type: 'sommet', pieceId: active.id, index: i };
       const milieux = poigneesMilieux(active, cat, (q) => versEcran(v, q), v.echelle, COTE_MIN_MILIEU_PX);
       const j = poigneeProche(milieux, pE, tactile ? TOUCHE_MILIEU_TACTILE_PX : TOUCHE_MILIEU_PX);

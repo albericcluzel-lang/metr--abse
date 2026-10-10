@@ -43,9 +43,8 @@ async function doigts(page: Page, departs: Point[], arrivees: Point[], etapes = 
   await cdp.detach();
 }
 
-async function glisser(page: Page, de: Point, a: Point) {
-  const p0 = await versEcran(page, de);
-  const p1 = await versEcran(page, a);
+/** Glisser d'un point à un autre de l'écran (px), au doigt ou à la souris. */
+async function glisserEcran(page: Page, p0: Point, p1: Point) {
   if (tactile()) {
     await doigts(page, [p0], [p1]);
   } else {
@@ -54,6 +53,18 @@ async function glisser(page: Page, de: Point, a: Point) {
     await page.mouse.move(p1.x, p1.y, { steps: 8 });
     await page.mouse.up();
   }
+}
+
+async function glisser(page: Page, de: Point, a: Point) {
+  await glisserEcran(page, await versEcran(page, de), await versEcran(page, a));
+}
+
+/** Sommets [x, y] de la pièce `i` du plan actuel du premier niveau. */
+function sommets(page: Page, i: number): Promise<number[][]> {
+  return page.evaluate(
+    (i) => (window as any).__etat.getState().projet.niveaux[0].actuel.pieces[i].sommets.map((s: Point) => [s.x, s.y]),
+    i,
+  );
 }
 
 async function attendreEnregistrement(page: Page) {
@@ -212,4 +223,32 @@ test('outils ouverture et équipement, glisser un sommet, zoom', async ({ page }
     await page.keyboard.press('Escape');
     await expect(page.locator('.plan2d-panneau')).toHaveCount(0);
   }
+});
+
+test('glisser une pièce petite à l’écran depuis son intérieur la déplace sans la déformer', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Petites pièces e2e',
+    `projet.niveaux[0].actuel.pieces.push(
+      fabrique.pieceRectangle('Séjour', 500, 400),
+      fabrique.pieceRectangle('Cuisine', 350, 280, { origine: { x: 600, y: 0 } }),
+      fabrique.pieceRectangle('WC', 100, 150, { origine: { x: 1000, y: 0 } }),
+    );`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await expect(page.locator('[data-etiquette]').filter({ hasText: 'Cuisine' })).toHaveCount(1);
+  // La cuisine fait moins de 64 px de haut à l'écran, comme sur un téléphone après un relevé.
+  while ((await lireVue(page)).echelle * 280 > 64) await page.getByRole('button', { name: 'Zoom arrière' }).click();
+  await toucher(page, { x: 775, y: 140 });
+  await expect(page.getByRole('heading', { name: 'Cuisine', exact: true })).toBeVisible();
+  const avant = await sommets(page, 1);
+  // Doigt posé dans la cuisine, à 18 px de son coin bas-gauche : dans le rayon de la poignée du sommet.
+  const coin = await versEcran(page, { x: 600, y: 280 });
+  const depart = { x: coin.x + 14, y: coin.y - 12 };
+  await glisserEcran(page, depart, { x: depart.x + 60, y: depart.y + 40 });
+  await expect.poll(async () => JSON.stringify(await sommets(page, 1))).not.toBe(JSON.stringify(avant));
+  const apres = await sommets(page, 1);
+  const [dx, dy] = [apres[0][0] - avant[0][0], apres[0][1] - avant[0][1]];
+  expect(apres).toEqual(avant.map(([x, y]) => [x + dx, y + dy]));
+  await expect(page.getByRole('heading', { name: 'Cuisine', exact: true })).toBeVisible();
 });
