@@ -421,3 +421,81 @@ test('réalité augmentée (session simulée) : après une rupture du repère, l
   expect(ecart).toBeGreaterThanOrEqual(99);
   expect(ecart).toBeLessThan(200);
 });
+
+/** Ouvre le relevé depuis le plan, comme l'utilisateur (le retour ramène au plan). */
+async function ouvrirReleveDepuisPlan(page: Page, id: string) {
+  await page.goto(`./#/chantier/${id}`);
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+}
+
+test('retour du téléphone dans le relevé : remonte d’une étape et demande confirmation avant de perdre des mesures', async ({ page }) => {
+  const id = await creerChantier(page, 'Retour Android');
+  await ouvrirReleveDepuisPlan(page, id);
+
+  // Mètre laser, deux côtés saisis : le retour demande confirmation.
+  await page.getByRole('button', { name: 'Mètre laser' }).click();
+  for (const [i, longueur] of [400, 300].entries()) {
+    await page.getByLabel(`Côté ${i + 1}`, { exact: true }).fill(String(longueur));
+    await page.getByRole('button', { name: 'Tourner à droite' }).click();
+  }
+  await page.goBack();
+  const dialogue = page.getByRole('alertdialog');
+  await expect(dialogue).toContainText('Abandonner cette zone ?');
+  await dialogue.getByRole('button', { name: 'Annuler' }).click();
+  // On reste dans la saisie, mesures intactes.
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+  await expect(page.getByLabel('Côté 3', { exact: true })).toBeVisible();
+  await page.goBack();
+  await dialogue.getByRole('button', { name: 'Abandonner la zone' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+
+  // Une zone relevée, finalisation : le retour revient à la liste des zones.
+  await page.getByRole('button', { name: 'Pièce rectangulaire' }).click();
+  await page.getByLabel('Longueur', { exact: true }).fill('300');
+  await page.getByLabel('Largeur', { exact: true }).fill('250');
+  await page.getByRole('button', { name: 'Ajouter la zone' }).click();
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await expect(page.getByLabel('Nom de la zone 1')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: /Relevé de pièces/ })).toBeVisible();
+
+  // Liste des zones : quitter demande confirmation ; refuser garde le relevé.
+  await page.goBack();
+  await expect(dialogue).toContainText('Abandonner le relevé ?');
+  await dialogue.getByRole('button', { name: 'Continuer le relevé' }).click();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+  // Confirmer : retour au plan, brouillon effacé.
+  await page.goBack();
+  await dialogue.getByRole('button', { name: 'Abandonner' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  await expect(page.getByRole('button', { name: 'Ajouter une pièce' })).toBeVisible();
+  expect(await lireBrouillon(page, id)).toBeNull();
+
+  // Choix de la méthode sans zone : le retour ramène simplement au plan.
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+});
+
+test('retour du téléphone en réalité augmentée (session simulée) : termine la session en gardant la pièce', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'Retour RA');
+  await ouvrirReleveDepuisPlan(page, id);
+  const viser = await demarrerSessionRA(page);
+  for (const [x, z] of [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+  ]) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  // Pendant la session, le retour vaut « Quitter » : la pièce en cours (3 angles) est gardée.
+  await page.goBack();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+});

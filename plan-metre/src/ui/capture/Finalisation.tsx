@@ -19,6 +19,7 @@ import {
 import { notifier } from '../commun/dialogues';
 import { Vue3D } from '../plan3d/Vue3D';
 import { ApercuAssemblage, surfaceM2, VignetteZone } from './Apercus';
+import { useRetourSysteme } from './retourSysteme';
 import { boiteDesPieces, construirePieces, nomsParDefaut, placerZones, type ZoneRelevee } from './zones';
 
 const NOMS_NIVEAUX = ['Sous-sol', 'RDC', 'R+1', 'R+2', 'R+3', 'Combles', 'Mezzanine'];
@@ -74,6 +75,7 @@ export function Finalisation({
     Object.fromEntries(zones.map((z) => [z.id, Math.round(z.hauteur)])),
   );
   const [vue, setVue] = useState<'2d' | '3d'>('2d');
+  useRetourSysteme(onRetour);
 
   const niveau = niveaux.find((n) => n.id === niveauId) ?? null;
   const cible = planCible(niveau, variante);

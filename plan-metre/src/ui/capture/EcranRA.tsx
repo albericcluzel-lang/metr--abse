@@ -11,6 +11,7 @@ import { formaterValeur } from '../../metre/calcul';
 import { BarreHaut, Bouton, ChampNombre } from '../commun/composants';
 import { Icone } from '../commun/Icone';
 import { IconeReleve } from './IconeReleve';
+import { useRetourSysteme } from './retourSysteme';
 import {
   aireAnglesM2,
   cloturerSession,
@@ -256,6 +257,9 @@ export function EcranRA({
     const s = sessionRef.current;
     if (s) void s.terminer();
   };
+
+  // Retour du téléphone : comme « Quitter » pendant la session, comme la flèche avant.
+  useRetourSysteme(enSession ? quitter : onRetour);
 
   const ouvrirSaisieHauteur = () => {
     setHauteurSaisie(etat.hauteur ?? hauteurDefaut);

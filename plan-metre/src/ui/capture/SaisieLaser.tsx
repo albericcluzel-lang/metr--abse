@@ -7,6 +7,7 @@ import { confirmer } from '../commun/dialogues';
 import { Icone } from '../commun/Icone';
 import { ApercuLaser } from './Apercus';
 import { IconeReleve } from './IconeReleve';
+import { useRetourSysteme } from './retourSysteme';
 import {
   construirePolygoneLaser,
   ECART_ALERTE_CM,
@@ -44,6 +45,9 @@ export function SaisieLaser({
   const trace = tracerLaser(cotesApercu);
   const numero = cotes.length + 1;
   const ecart = Math.round(trace.ecartFermeture * 10) / 10;
+
+  const retour = () => onRetour(cotesApercu.length > 0);
+  useRetourSysteme(retour);
 
   const focaliserChamp = () => panneau.current?.querySelector<HTMLInputElement>('input')?.focus();
 
@@ -106,7 +110,7 @@ export function SaisieLaser({
 
   return (
     <div className="ecran">
-      <BarreHaut titre="Mètre laser" sousTitre={`Côté ${numero}`} onRetour={() => onRetour(cotesApercu.length > 0)} />
+      <BarreHaut titre="Mètre laser" sousTitre={`Côté ${numero}`} onRetour={retour} />
       <div className="releve-laser">
         <div className="releve-laser-apercu">
           <ApercuLaser trace={trace} coteEnCours={longueurValide} />
