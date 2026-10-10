@@ -232,6 +232,23 @@ describe('changer la longueur d’un côté', () => {
     ]);
   });
 
+  it('un côté translaté d’un bloc emporte ses ouvertures', () => {
+    // Entrée avec un pan coupé à 45° et une porte centrée dessus.
+    const base = nouvellePiece('Entrée', [
+      { x: 0, y: 0 },
+      { x: 300, y: 0 },
+      { x: 400, y: 100 },
+      { x: 400, y: 300 },
+      { x: 0, y: 300 },
+    ]);
+    const centree = ouvertureSurCote(base, 'porte', 1);
+    base.ouvertures = [{ ...centree, id: 'p' }];
+    const p = changerLongueurCote(base, 0, 350);
+    expect(p.sommets[2]).toMatchObject({ x: 450, y: 100 });
+    expect(ouv(p, 'p').position).toBe(centree.position);
+    expect(emprise(p, ouv(p, 'p'))[0].x).toBeCloseTo(emprise(base, centree)[0].x + 50, 6);
+  });
+
   it('ignore une longueur nulle ou invalide', () => {
     const base = sejour();
     expect(changerLongueurCote(base, 0, 0)).toBe(base);

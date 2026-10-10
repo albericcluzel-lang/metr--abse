@@ -55,23 +55,27 @@ function milieuOuverture(piece: Piece, o: Ouverture): Point {
   return pointSurCote(piece.sommets, o.cote, o.position + o.largeur / 2);
 }
 
-function memePoint(a: Point, b: Point): boolean {
-  return a.x === b.x && a.y === b.y;
+/** Le côté i est-il resté identique ou n'a-t-il été que translaté (ses deux sommets du même vecteur) ? */
+function coteTranslate(avant: readonly Point[], apres: readonly Point[], i: number): boolean {
+  const a0 = avant[i];
+  const a1 = apres[i];
+  const b0 = suivant(avant, i);
+  const b1 = suivant(apres, i);
+  // Tolérance : chaque sommet déplacé est arrondi au centième de cm.
+  return Math.abs(a1.x - a0.x - (b1.x - b0.x)) < 0.05 && Math.abs(a1.y - a0.y - (b1.y - b0.y)) < 0.05;
 }
 
 /**
- * Remplace les sommets d'une pièce (même nombre de sommets) : les ouvertures
- * des côtés modifiés gardent leur place dans le plan (projection de leur
- * milieu sur le nouveau côté), bornées au côté.
+ * Remplace les sommets d'une pièce (même nombre de sommets) : un côté
+ * seulement translaté emporte ses ouvertures (même position) ; sur un côté
+ * déformé, elles gardent leur place dans le plan (projection de leur milieu
+ * sur le nouveau côté), bornées au côté.
  */
 export function avecSommets(avant: Piece, sommets: Sommet[]): Piece {
   const n = sommets.length;
   const ouvertures = avant.ouvertures.map((o) => {
     if (o.cote < 0 || o.cote >= n || n !== avant.sommets.length) return o;
-    const inchange =
-      memePoint(avant.sommets[o.cote], sommets[o.cote]) &&
-      memePoint(suivant(avant.sommets, o.cote), suivant(sommets, o.cote));
-    if (inchange) return o;
+    if (coteTranslate(avant.sommets, sommets, o.cote)) return o;
     const m = milieuOuverture(avant, o);
     const l = longueurCote(sommets, o.cote);
     const position = bornerPosition(abscisseSurCote(sommets, o.cote, m) - o.largeur / 2, o.largeur, l);
