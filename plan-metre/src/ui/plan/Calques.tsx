@@ -4,22 +4,13 @@
 
 import { memo, type ReactNode } from 'react';
 import { contourExterieur, epaisseurCote, typeMurIdCote } from '../../geometrie/piece';
-import {
-  aire,
-  angleCote,
-  boiteEnglobante,
-  distance,
-  longueurCote,
-  normaleExterieure,
-  pointEtiquette,
-  suivant,
-} from '../../geometrie/polygone';
-import { formaterValeur } from '../../metre/calcul';
+import { distance, normaleExterieure, suivant } from '../../geometrie/polygone';
 import type { Catalogue, ID, Photo, Piece, Plan, Point, Selection } from '../../model/types';
 import { Icone } from '../commun/Icone';
 import type { Aimant } from './aimantation';
 import { angleLisible, cheminFerme, couleurSol } from './dessin';
 import { SymboleEquipement, SymboleOuverture } from './symboles';
+import { disposerTextes, type CoteDisposee } from './textes';
 import { ECART_POIGNEE_MILIEU_PX, poigneesMilieux } from './touche';
 import { pasGrille, versEcran, type Vue } from './vue';
 
@@ -160,90 +151,42 @@ function CoteSelectionne({ piece, index, catalogue, px }: { piece: Piece; index:
 
 // ─── Textes (repère écran) ───────────────────────────────────────────────
 
-interface Rect {
-  x0: number;
-  y0: number;
-  x1: number;
-  y1: number;
-}
-
-function seChevauchent(a: Rect, b: Rect): boolean {
-  return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
-}
-
-/**
- * Cotes intérieures et étiquettes des pièces, à taille fixe à l'écran. Une
- * cote qui recouvrirait l'étiquette d'une pièce est masquée (elle réapparaît
- * en zoomant), sauf celle du côté sélectionné.
- */
+/** Cotes intérieures et étiquettes des pièces, à taille fixe à l'écran (disposition : cf. textes.ts). */
 export function CalqueTextes({ plan, vue, selection }: { plan: Plan; vue: Vue; selection: Selection | null }) {
-  const e = vue.echelle;
   const idActif = pieceActive(selection);
-  const pieces = piecesDessinables(plan);
-  const etiquettes: ReactNode[] = [];
-  const zonesEtiquettes: Rect[] = [];
-  for (const p of pieces) {
-    const boite = boiteEnglobante(p.sommets);
-    if (Math.min(boite.maxX - boite.minX, boite.maxY - boite.minY) * e < 34) continue;
-    const c = versEcran(vue, pointEtiquette(p.sommets));
-    const nom = p.nom || 'Sans nom';
-    const surface = formaterValeur(aire(p.sommets) / 1e4, 'm²');
-    // Largeur estimée du texte (pas de mesure possible avant affichage).
-    const demi = Math.max(nom.length * 8.2, surface.length * 7) / 2 + 2;
-    zonesEtiquettes.push({ x0: c.x - demi, y0: c.y - 17, x1: c.x + demi, y1: c.y + 18 });
-    etiquettes.push(
-      <text key={p.id} className={`plan2d-etiquette${idActif === p.id ? ' active' : ''}`} x={c.x} y={c.y} data-etiquette={p.id}>
-        <tspan className="plan2d-etiquette-nom" x={c.x} y={c.y - 3}>
-          {nom}
-        </tspan>
-        <tspan className="plan2d-etiquette-surface" x={c.x} y={c.y + 13}>
-          {surface}
-        </tspan>
-      </text>,
-    );
-  }
-  const cotes: ReactNode[] = [];
-  let coteActive: ReactNode = null;
-  for (const p of pieces) {
-    for (let i = 0; i < p.sommets.length; i++) {
-      const l = longueurCote(p.sommets, i);
-      if (l * e < 46) continue;
-      const a = p.sommets[i];
-      const b = suivant(p.sommets, i);
-      const m = versEcran(vue, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
-      const n = normaleExterieure(p.sommets, i);
-      const angle = angleLisible((angleCote(p.sommets, i) * 180) / Math.PI);
-      const actif = selection?.type === 'cote' && selection.pieceId === p.id && selection.index === i;
-      const x = m.x - n.x * 13;
-      const y = m.y - n.y * 13;
-      const texte = `${Math.round(l)} cm`;
-      if (!actif) {
-        const w = texte.length * 6.6;
-        const h = 13;
-        const r = (angle * Math.PI) / 180;
-        const hx = (Math.abs(Math.cos(r)) * w + Math.abs(Math.sin(r)) * h) / 2;
-        const hy = (Math.abs(Math.sin(r)) * w + Math.abs(Math.cos(r)) * h) / 2;
-        const zone = { x0: x - hx, y0: y - hy, x1: x + hx, y1: y + hy };
-        if (zonesEtiquettes.some((z) => seChevauchent(z, zone))) continue;
-      }
-      const element = (
-        <text
-          key={`${p.id}-${i}`}
-          className={`plan2d-cote${actif ? ' active' : ''}`}
-          transform={`translate(${x.toFixed(1)} ${y.toFixed(1)}) rotate(${angle.toFixed(2)})`}
-        >
-          {texte}
-        </text>
-      );
-      if (actif) coteActive = element;
-      else cotes.push(element);
-    }
-  }
+  const { etiquettes, cotes } = disposerTextes(plan, vue, selection);
+  const element = (c: CoteDisposee) => (
+    <text
+      key={c.cle}
+      className={`plan2d-cote${c.active ? ' active' : ''}`}
+      transform={`translate(${c.x.toFixed(1)} ${c.y.toFixed(1)}) rotate(${c.angle.toFixed(2)})`}
+    >
+      {c.texte}
+    </text>
+  );
+  const active = cotes.find((c) => c.active);
   return (
     <g className="plan2d-textes">
-      {cotes}
-      {etiquettes}
-      {coteActive}
+      {cotes.filter((c) => !c.active).map(element)}
+      {etiquettes.map((et) => (
+        <text
+          key={et.pieceId}
+          className={`plan2d-etiquette${idActif === et.pieceId ? ' active' : ''}`}
+          x={et.x}
+          y={et.y}
+          data-etiquette={et.pieceId}
+        >
+          {et.nom && (
+            <tspan className="plan2d-etiquette-nom" x={et.x} y={et.y - 3}>
+              {et.nom}
+            </tspan>
+          )}
+          <tspan className="plan2d-etiquette-surface" x={et.x} y={et.nom ? et.y + 13 : et.y + 4}>
+            {et.surface}
+          </tspan>
+        </text>
+      ))}
+      {active && element(active)}
     </g>
   );
 }

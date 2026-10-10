@@ -439,3 +439,48 @@ test('clavier ouvert : la pièce en cours de modification reste visible au-dessu
     })
     .toBe(true);
 });
+
+test('textes du plan lisibles : cote active, étiquette d’une petite pièce, cote d’un mur avec porte', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Textes e2e',
+    `const salon = fabrique.pieceRectangle('Salon', 500, 400);
+    salon.ouvertures.push(fabrique.nouvelleOuverture('porte', 0, 208.5));
+    const sdb = fabrique.pieceRectangle('Salle de bain', 300, 180, { origine: { x: 600, y: 300 } });
+    sdb.equipements.push(fabrique.nouvelEquipement('baignoire', { x: 720, y: 335 }));
+    projet.niveaux[0].actuel.pieces.push(
+      salon,
+      fabrique.pieceRectangle('Cuisine', 350, 280, { origine: { x: 600, y: 0 } }),
+      sdb,
+    );`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await expect(page.locator('[data-etiquette]').filter({ hasText: 'Salon' })).toHaveCount(1);
+  // Même échelle sur PC et téléphone (celle d'un téléphone après le relevé).
+  while ((await lireVue(page)).echelle > 0.24) await page.getByRole('button', { name: 'Zoom arrière' }).click();
+  type Boite = { x: number; y: number; width: number; height: number };
+  const seCoupent = (a: Boite, b: Boite) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+  // Étiquette de la salle de bain : dans la pièce, sans mordre sur les murs.
+  const idSdb = await page.evaluate(() => (window as any).__etat.getState().projet.niveaux[0].actuel.pieces[2].id as string);
+  const coin0 = await versEcran(page, { x: 600, y: 300 });
+  const coin1 = await versEcran(page, { x: 900, y: 480 });
+  const bs = (await page.locator(`[data-etiquette="${idSdb}"]`).boundingBox())!;
+  expect(bs.x).toBeGreaterThanOrEqual(coin0.x);
+  expect(bs.x + bs.width).toBeLessThanOrEqual(coin1.x);
+
+  // Aucune cote sous l'arc de la porte du salon.
+  const arc = (await page.locator('.plan2d-ouverture-arc').first().boundingBox())!;
+  for (const c of await page.locator('.plan2d-cote').all()) {
+    expect(seCoupent((await c.boundingBox())!, arc)).toBe(false);
+  }
+
+  // Côté gauche de la cuisine sélectionné : sa cote ne recouvre aucune étiquette.
+  await toucher(page, { x: 596, y: 140 });
+  await expect(page.getByRole('heading', { name: 'Côté 4 · Cuisine' })).toBeVisible();
+  const active = (await page.locator('.plan2d-cote.active').boundingBox())!;
+  for (const e of await page.locator('[data-etiquette]').all()) {
+    expect(seCoupent(active, (await e.boundingBox())!)).toBe(false);
+  }
+});
