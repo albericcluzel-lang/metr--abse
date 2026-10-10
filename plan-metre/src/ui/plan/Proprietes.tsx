@@ -1,7 +1,7 @@
 // Panneau de propriétés de la sélection : feuille du bas (sans voile) sur
 // téléphone, panneau latéral à droite à partir de 900 px de large.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { trouverTypeMur } from '../../geometrie/piece';
 import { aire, longueurCote, perimetre } from '../../geometrie/polygone';
 import { formaterValeur } from '../../metre/calcul';
@@ -128,7 +128,7 @@ function useFermerSousAutreFeuille(actif: boolean) {
   }, [actif]);
 }
 
-export function PanneauProprietes({ large }: { large: boolean }) {
+export const PanneauProprietes = memo(function PanneauProprietes({ large }: { large: boolean }) {
   const projet = useEtat((e) => e.projet);
   const selection = useEtat((e) => e.selection);
   const plan = useEtat((e) => planCourant(e));
@@ -166,7 +166,7 @@ export function PanneauProprietes({ large }: { large: boolean }) {
       {corps}
     </FeuilleBas>
   );
-}
+});
 
 function ChampSegments<T extends string>({
   libelle,

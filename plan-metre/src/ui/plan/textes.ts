@@ -27,6 +27,7 @@ export interface EtiquetteDisposee {
 
 export interface CoteDisposee {
   cle: string;
+  pieceId: ID;
   x: number;
   y: number;
   angle: number;
@@ -139,6 +140,7 @@ export function disposerTextes(
       const active = selection?.type === 'cote' && selection.pieceId === p.id && selection.index === i;
       cotes.push({
         cle: `${p.id}-${i}`,
+        pieceId: p.id,
         x: m.x - n.x * place.retrait,
         y: m.y - n.y * place.retrait,
         angle: angleLisible((angleCote(p.sommets, i) * 180) / Math.PI),

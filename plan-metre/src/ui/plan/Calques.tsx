@@ -10,7 +10,7 @@ import { Icone } from '../commun/Icone';
 import type { Aimant } from './aimantation';
 import { angleLisible, cheminFerme, couleurSol } from './dessin';
 import { SymboleEquipement, SymboleOuverture } from './symboles';
-import { disposerTextes, type CoteDisposee } from './textes';
+import { disposerTextes, type CoteDisposee, type EtiquetteDisposee } from './textes';
 import { ECART_POIGNEE_MILIEU_PX, poigneesMilieux } from './touche';
 import { pasGrille, versEcran, type Vue } from './vue';
 
@@ -58,77 +58,126 @@ export function Grille({ vue, largeur, hauteur }: { vue: Vue; largeur: number; h
 
 // ─── Pièces (repère du plan) ─────────────────────────────────────────────
 
+/**
+ * Taille d'un pixel écran (cm) pour l'épaisseur des traits, arrondie par
+ * paliers d'environ 19 % : pendant un zoom, les pièces ne sont redessinées
+ * qu'au changement de palier (seule la transformation du calque change).
+ */
+export function pixelTrait(echelle: number): number {
+  return 1 / 2 ** (Math.round(Math.log2(echelle) * 4) / 4);
+}
+
+// Un composant par pièce et par couche, mémorisé : pendant le glisser d'une
+// pièce, ou un zoom, les autres pièces ne sont pas redessinées.
+
+const SolPiece = memo(function SolPiece({ piece, catalogue }: { piece: Piece; catalogue: Catalogue }) {
+  return <path className="plan2d-sol" d={cheminFerme(piece.sommets)} fill={couleurSol(piece, catalogue)} data-piece={piece.id} />;
+});
+
+const EquipementsPiece = memo(function EquipementsPiece({ piece, px, selectionne }: { piece: Piece; px: number; selectionne: ID | null }) {
+  return (
+    <>
+      {piece.equipements.map((e) => (
+        <SymboleEquipement key={e.id} e={e} px={px} selectionne={e.id === selectionne} />
+      ))}
+    </>
+  );
+});
+
+const MurPiece = memo(function MurPiece({ piece, catalogue, actif }: { piece: Piece; catalogue: Catalogue; actif: boolean }) {
+  return (
+    <path
+      className={`plan2d-mur${actif ? ' actif' : ''}`}
+      d={cheminFerme(contourExterieur(piece, catalogue)) + cheminFerme(piece.sommets)}
+      fillRule="evenodd"
+    />
+  );
+});
+
+const SansMurPiece = memo(function SansMurPiece({ piece, px }: { piece: Piece; px: number }) {
+  return (
+    <>
+      {piece.sommets.map((a, i) => {
+        if (typeMurIdCote(piece, i) !== null) return null;
+        const b = suivant(piece.sommets, i);
+        return (
+          <line
+            key={i}
+            className="plan2d-sans-mur"
+            x1={a.x}
+            y1={a.y}
+            x2={b.x}
+            y2={b.y}
+            strokeWidth={1.2 * px}
+            strokeDasharray={`${5 * px} ${4 * px}`}
+          />
+        );
+      })}
+    </>
+  );
+});
+
+const OuverturesPiece = memo(function OuverturesPiece({
+  piece,
+  catalogue,
+  px,
+  selectionnee,
+}: {
+  piece: Piece;
+  catalogue: Catalogue;
+  px: number;
+  selectionnee: ID | null;
+}) {
+  return (
+    <>
+      {piece.ouvertures.map((o) => (
+        <SymboleOuverture key={o.id} piece={piece} o={o} catalogue={catalogue} px={px} selectionne={o.id === selectionnee} />
+      ))}
+    </>
+  );
+});
+
 interface PropsCalquePlan {
   plan: Plan;
   catalogue: Catalogue;
   selection: Selection | null;
-  echelle: number;
+  /** Taille d'un pixel écran (cm), cf. pixelTrait. */
+  px: number;
 }
 
 /** Sols, équipements, murs et ouvertures. Ne dépend pas du déplacement de la vue. */
-export const CalquePlan = memo(function CalquePlan({ plan, catalogue, selection, echelle }: PropsCalquePlan) {
-  const px = 1 / echelle;
+export const CalquePlan = memo(function CalquePlan({ plan, catalogue, selection, px }: PropsCalquePlan) {
   const idActif = pieceActive(selection);
   const pieces = piecesDessinables(plan);
   const active = pieces.find((p) => p.id === idActif);
   // La pièce active est dessinée en dernier : son mur passe au-dessus des murs mitoyens.
   const ordreMurs = active ? [...pieces.filter((p) => p !== active), active] : pieces;
-  const sansMur: ReactNode[] = [];
-  for (const p of pieces) {
-    p.sommets.forEach((a, i) => {
-      if (typeMurIdCote(p, i) !== null) return;
-      const b = suivant(p.sommets, i);
-      sansMur.push(
-        <line
-          key={`${p.id}-${i}`}
-          className="plan2d-sans-mur"
-          x1={a.x}
-          y1={a.y}
-          x2={b.x}
-          y2={b.y}
-          strokeWidth={1.2 * px}
-          strokeDasharray={`${5 * px} ${4 * px}`}
-        />,
-      );
-    });
-  }
+  const dans = (p: Piece, type: 'equipement' | 'ouverture') =>
+    selection?.type === type && selection.pieceId === p.id
+      ? selection.type === 'equipement'
+        ? selection.equipementId
+        : selection.type === 'ouverture'
+          ? selection.ouvertureId
+          : null
+      : null;
   return (
     <g className="plan2d-calque-plan">
       {pieces.map((p) => (
-        <path key={p.id} className="plan2d-sol" d={cheminFerme(p.sommets)} fill={couleurSol(p, catalogue)} data-piece={p.id} />
+        <SolPiece key={p.id} piece={p} catalogue={catalogue} />
       ))}
       {active && <path className="plan2d-sol-actif" d={cheminFerme(active.sommets)} />}
-      {pieces.map((p) =>
-        p.equipements.map((e) => (
-          <SymboleEquipement
-            key={e.id}
-            e={e}
-            px={px}
-            selectionne={selection?.type === 'equipement' && selection.equipementId === e.id}
-          />
-        )),
-      )}
-      {ordreMurs.map((p) => (
-        <path
-          key={p.id}
-          className={`plan2d-mur${selection?.type === 'piece' && selection.pieceId === p.id ? ' actif' : ''}`}
-          d={cheminFerme(contourExterieur(p, catalogue)) + cheminFerme(p.sommets)}
-          fillRule="evenodd"
-        />
+      {pieces.map((p) => (
+        <EquipementsPiece key={p.id} piece={p} px={px} selectionne={dans(p, 'equipement')} />
       ))}
-      {sansMur}
-      {pieces.map((p) =>
-        p.ouvertures.map((o) => (
-          <SymboleOuverture
-            key={o.id}
-            piece={p}
-            o={o}
-            catalogue={catalogue}
-            px={px}
-            selectionne={selection?.type === 'ouverture' && selection.ouvertureId === o.id}
-          />
-        )),
-      )}
+      {ordreMurs.map((p) => (
+        <MurPiece key={p.id} piece={p} catalogue={catalogue} actif={selection?.type === 'piece' && selection.pieceId === p.id} />
+      ))}
+      {pieces.map((p) => (
+        <SansMurPiece key={p.id} piece={p} px={px} />
+      ))}
+      {pieces.map((p) => (
+        <OuverturesPiece key={p.id} piece={p} catalogue={catalogue} px={px} selectionnee={dans(p, 'ouverture')} />
+      ))}
       {selection?.type === 'cote' && active && <CoteSelectionne piece={active} index={selection.index} catalogue={catalogue} px={px} />}
     </g>
   );
@@ -151,49 +200,82 @@ function CoteSelectionne({ piece, index, catalogue, px }: { piece: Piece; index:
 
 // ─── Textes (repère écran) ───────────────────────────────────────────────
 
-/** Cotes intérieures et étiquettes des pièces, à taille fixe à l'écran (disposition : cf. textes.ts). */
-export function CalqueTextes({ plan, vue, selection }: { plan: Plan; vue: Vue; selection: Selection | null }) {
-  const idActif = pieceActive(selection);
-  const { etiquettes, cotes } = disposerTextes(plan, vue, selection);
-  const element = (c: CoteDisposee) => (
+function TexteCote({ c }: { c: CoteDisposee }) {
+  return (
     <text
-      key={c.cle}
       className={`plan2d-cote${c.active ? ' active' : ''}`}
       transform={`translate(${c.x.toFixed(1)} ${c.y.toFixed(1)}) rotate(${c.angle.toFixed(2)})`}
     >
       {c.texte}
     </text>
   );
+}
+
+const memesCotes = (a: { cotes: CoteDisposee[] }, b: { cotes: CoteDisposee[] }) =>
+  a.cotes.length === b.cotes.length &&
+  a.cotes.every((c, i) => {
+    const d = b.cotes[i];
+    return c.cle === d.cle && c.x === d.x && c.y === d.y && c.angle === d.angle && c.texte === d.texte && c.active === d.active;
+  });
+
+/** Cotes d'une pièce : redessinées seulement si elles changent (glisser d'une autre pièce). */
+const CotesPiece = memo(function CotesPiece({ cotes }: { cotes: CoteDisposee[] }) {
+  return (
+    <>
+      {cotes.map((c) => (
+        <TexteCote key={c.cle} c={c} />
+      ))}
+    </>
+  );
+}, memesCotes);
+
+const EtiquettePiece = memo(
+  function EtiquettePiece({ et, active }: { et: EtiquetteDisposee; active: boolean }) {
+    return (
+      <text className={`plan2d-etiquette${active ? ' active' : ''}`} x={et.x} y={et.y} data-etiquette={et.pieceId}>
+        {et.nom && (
+          <tspan className="plan2d-etiquette-nom" x={et.x} y={et.y - 3}>
+            {et.nom}
+          </tspan>
+        )}
+        <tspan className="plan2d-etiquette-surface" x={et.x} y={et.nom ? et.y + 13 : et.y + 4}>
+          {et.surface}
+        </tspan>
+      </text>
+    );
+  },
+  (a, b) =>
+    a.active === b.active &&
+    a.et.pieceId === b.et.pieceId &&
+    a.et.x === b.et.x &&
+    a.et.y === b.et.y &&
+    a.et.nom === b.et.nom &&
+    a.et.surface === b.et.surface,
+);
+
+/** Cotes intérieures et étiquettes des pièces, à taille fixe à l'écran (disposition : cf. textes.ts). */
+export const CalqueTextes = memo(function CalqueTextes({ plan, vue, selection }: { plan: Plan; vue: Vue; selection: Selection | null }) {
+  const idActif = pieceActive(selection);
+  const { etiquettes, cotes } = disposerTextes(plan, vue, selection);
+  const parPiece = new Map<ID, CoteDisposee[]>();
+  for (const c of cotes) if (!c.active) parPiece.set(c.pieceId, [...(parPiece.get(c.pieceId) ?? []), c]);
   const active = cotes.find((c) => c.active);
   return (
     <g className="plan2d-textes">
-      {cotes.filter((c) => !c.active).map(element)}
-      {etiquettes.map((et) => (
-        <text
-          key={et.pieceId}
-          className={`plan2d-etiquette${idActif === et.pieceId ? ' active' : ''}`}
-          x={et.x}
-          y={et.y}
-          data-etiquette={et.pieceId}
-        >
-          {et.nom && (
-            <tspan className="plan2d-etiquette-nom" x={et.x} y={et.y - 3}>
-              {et.nom}
-            </tspan>
-          )}
-          <tspan className="plan2d-etiquette-surface" x={et.x} y={et.nom ? et.y + 13 : et.y + 4}>
-            {et.surface}
-          </tspan>
-        </text>
+      {[...parPiece].map(([id, liste]) => (
+        <CotesPiece key={id} cotes={liste} />
       ))}
-      {active && element(active)}
+      {etiquettes.map((et) => (
+        <EtiquettePiece key={et.pieceId} et={et} active={idActif === et.pieceId} />
+      ))}
+      {active && <TexteCote key={active.cle} c={active} />}
     </g>
   );
-}
+});
 
 // ─── Poignées de la pièce active ─────────────────────────────────────────
 
-export function CalquePoignees({
+export const CalquePoignees = memo(function CalquePoignees({
   piece,
   catalogue,
   vue,
@@ -235,11 +317,11 @@ export function CalquePoignees({
       ))}
     </g>
   );
-}
+});
 
 // ─── Épingles photo ──────────────────────────────────────────────────────
 
-export function CalquePhotos({ photos, vue, selection }: { photos: Photo[]; vue: Vue; selection: Selection | null }) {
+export const CalquePhotos = memo(function CalquePhotos({ photos, vue, selection }: { photos: Photo[]; vue: Vue; selection: Selection | null }) {
   return (
     <g className="plan2d-epingles">
       {photos.map((ph) => {
@@ -263,7 +345,7 @@ export function CalquePhotos({ photos, vue, selection }: { photos: Photo[]; vue:
       })}
     </g>
   );
-}
+});
 
 // ─── Tracé d'une nouvelle pièce ──────────────────────────────────────────
 

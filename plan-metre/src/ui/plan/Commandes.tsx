@@ -1,7 +1,7 @@
 // Commandes flottantes de l'éditeur : palette d'outils (colonne à gauche),
 // bandeaux d'aide et de choix du type, barre du tracé, état vide.
 
-import { useState, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import { Bouton, BoutonIcone, FeuilleBas } from '../commun/composants';
 import { Icone, type NomIcone } from '../commun/Icone';
 
@@ -15,7 +15,7 @@ const OUTILS: { id: Outil; icone: NomIcone; libelle: string }[] = [
   { id: 'photo', icone: 'photo', libelle: 'Placer une photo' },
 ];
 
-export function Palette({
+export const Palette = memo(function Palette({
   outil,
   onOutil,
   onZoomAvant,
@@ -49,7 +49,7 @@ export function Palette({
       </div>
     </div>
   );
-}
+});
 
 export interface ChoixType<T extends string> {
   libelle: string;

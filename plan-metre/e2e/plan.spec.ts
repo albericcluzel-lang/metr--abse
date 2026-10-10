@@ -19,10 +19,16 @@ async function lireVue(page: Page) {
 }
 
 async function versEcran(page: Page, p: Point): Promise<Point> {
-  // Laisse passer un éventuel recadrage (fait à l'image suivante).
-  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  // Laisse passer un éventuel recadrage (fait à l'image suivante) : la vue
+  // doit être la même sur deux lectures successives.
+  let v = await lireVue(page);
+  for (let essai = 0; essai < 20; essai++) {
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const w = await lireVue(page);
+    if (w.echelle === v.echelle && w.tx === v.tx && w.ty === v.ty) break;
+    v = w;
+  }
   const boite = (await page.locator('svg.plan2d-svg').boundingBox())!;
-  const v = await lireVue(page);
   return { x: boite.x + v.tx + p.x * v.echelle, y: boite.y + v.ty + p.y * v.echelle };
 }
 
@@ -67,8 +73,8 @@ function sommets(page: Page, i: number): Promise<number[][]> {
   );
 }
 
-/** Touche un endroit vide du plan : ni pièce ni mur à moins de 24 px, ni commande par-dessus. */
-async function toucherLeVide(page: Page) {
+/** Endroit vide du plan (px) : ni pièce ni mur à moins de 24 px, ni commande par-dessus. */
+async function pointVide(page: Page): Promise<Point> {
   const boite = (await page.locator('svg.plan2d-svg').boundingBox())!;
   const p = await page.evaluate((b) => {
     const vide = (x: number, y: number) => {
@@ -85,8 +91,35 @@ async function toucherLeVide(page: Page) {
     return null;
   }, boite);
   if (!p) throw new Error('Aucun endroit vide sur le plan');
+  return p;
+}
+
+/** Touche un endroit vide du plan. */
+async function toucherLeVide(page: Page) {
+  const p = await pointVide(page);
   if (tactile()) await page.touchscreen.tap(p.x, p.y);
   else await page.mouse.click(p.x, p.y);
+}
+
+/** Glisser en plusieurs étapes, en s'arrêtant avant de lâcher : renvoie la fonction qui lâche. */
+async function glisserSansLacher(page: Page, de: Point, vers: Point, etapes = 10): Promise<() => Promise<void>> {
+  if (tactile()) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: de.x, y: de.y, id: 0 }] });
+    for (let k = 1; k <= etapes; k++) {
+      const x = de.x + ((vers.x - de.x) * k) / etapes;
+      const y = de.y + ((vers.y - de.y) * k) / etapes;
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y, id: 0 }] });
+    }
+    return async () => {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      await cdp.detach();
+    };
+  }
+  await page.mouse.move(de.x, de.y);
+  await page.mouse.down();
+  await page.mouse.move(vers.x, vers.y, { steps: etapes });
+  return () => page.mouse.up();
 }
 
 async function attendreEnregistrement(page: Page) {
@@ -262,9 +295,9 @@ test('glisser une pièce petite à l’écran depuis son intérieur la déplace 
   await toucher(page, { x: 775, y: 140 });
   await expect(page.getByRole('heading', { name: 'Cuisine', exact: true })).toBeVisible();
   const avant = await sommets(page, 1);
-  // Doigt posé dans la cuisine, à 18 px de son coin bas-gauche : dans le rayon de la poignée du sommet.
-  const coin = await versEcran(page, { x: 600, y: 280 });
-  const depart = { x: coin.x + 14, y: coin.y - 12 };
+  // Doigt posé dans la cuisine, à 18 px de son coin haut-gauche : dans le rayon de la poignée du sommet.
+  const coin = await versEcran(page, { x: 600, y: 0 });
+  const depart = { x: coin.x + 14, y: coin.y + 12 };
   await glisserEcran(page, depart, { x: depart.x + 60, y: depart.y + 40 });
   await expect.poll(async () => JSON.stringify(await sommets(page, 1))).not.toBe(JSON.stringify(avant));
   const apres = await sommets(page, 1);
@@ -483,4 +516,61 @@ test('textes du plan lisibles : cote active, étiquette d’une petite pièce, c
   for (const e of await page.locator('[data-etiquette]').all()) {
     expect(seCoupent(active, (await e.boundingBox())!)).toBe(false);
   }
+});
+
+test('30 pièces : un glisser ne recopie pas le chantier ni ne redessine tout à chaque mouvement', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Trente pièces e2e',
+    `for (let k = 0; k < 30; k++) {
+      const c = k % 6, l = Math.floor(k / 6);
+      const p = fabrique.pieceRectangle('Bureau ' + (k + 1), 350, 460, { origine: { x: c * 360, y: l * 470 } });
+      p.ouvertures.push(fabrique.nouvelleOuverture('porte', 0, 100), fabrique.nouvelleOuverture('fenetre', 2, 120));
+      p.equipements.push(fabrique.nouvelEquipement('radiateur', { x: c * 360 + 175, y: l * 470 + 440 }));
+      projet.niveaux[0].actuel.pieces.push(p);
+    }`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await expect(page.locator('.plan2d-sol')).toHaveCount(30);
+  const bureau15 = { x: 2 * 360 + 175, y: 2 * 470 + 230 };
+  await toucher(page, bureau15);
+  await expect(page.getByRole('heading', { name: 'Bureau 15', exact: true })).toBeVisible();
+  const x0 = () => page.evaluate(() => (window as any).__etat.getState().projet.niveaux[0].actuel.pieces[14].sommets[0].x as number);
+  const avant = await x0();
+
+  // Glisser la pièce : le chantier n'est modifié qu'une fois, au lâcher.
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__copies = 0;
+    w.__desabonner = w.__etat.subscribe((e: any, p: any) => {
+      if (e.projet !== p.projet) w.__copies++;
+    });
+  });
+  const depart = await versEcran(page, bureau15);
+  const lacher = await glisserSansLacher(page, depart, { x: depart.x + 40, y: depart.y + 25 });
+  await expect.poll(() => page.locator('.plan2d-sol').count()).toBe(30);
+  expect(await page.evaluate(() => (window as any).__copies)).toBe(0);
+  await lacher();
+  await expect.poll(() => page.evaluate(() => (window as any).__copies)).toBe(1);
+  expect(await x0()).not.toBe(avant);
+  await page.evaluate(() => (window as any).__desabonner());
+
+  // Déplacer la vue : pièces et textes ne sont pas redessinés pendant le geste.
+  await toucherLeVide(page);
+  await expect(page.locator('.plan2d-proprietes')).toHaveCount(0);
+  const vide = await pointVide(page);
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__mutations = 0;
+    w.__observateur = new MutationObserver((l) => (w.__mutations += l.length));
+    for (const el of document.querySelectorAll('.plan2d-calque-plan, .plan2d-textes')) {
+      w.__observateur.observe(el, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+  });
+  const vueAvant = await lireVue(page);
+  const lacherVue = await glisserSansLacher(page, vide, { x: vide.x + 30, y: vide.y + 40 });
+  await expect.poll(async () => (await lireVue(page)).ty).not.toBe(vueAvant.ty);
+  expect(await page.evaluate(() => (window as any).__mutations)).toBe(0);
+  await lacherVue();
+  await page.evaluate(() => (window as any).__observateur.disconnect());
 });
