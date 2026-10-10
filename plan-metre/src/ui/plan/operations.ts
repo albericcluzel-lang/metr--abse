@@ -159,10 +159,18 @@ export function supprimerSommet(piece: Piece, index: number): Piece {
   return { ...piece, sommets, ouvertures };
 }
 
+/** Le côté i part-il dans la direction `u` (prolongement d'un côté coupé en deux) ? */
+function dansLeProlongement(sommets: readonly Point[], i: number, u: Point): boolean {
+  const v = direction(sommets[i], suivant(sommets, i));
+  return Math.abs(u.x * v.y - u.y * v.x) < 1e-3 && u.x * v.x + u.y * v.y > 0;
+}
+
 /**
  * Donne au côté `cote` la longueur `longueur` en déplaçant son sommet de fin
  * le long de la direction du côté. Avec `garderAngles`, le côté suivant est
- * translaté du même vecteur (une pièce rectangulaire reste rectangulaire).
+ * translaté du même vecteur (une pièce rectangulaire reste rectangulaire) ;
+ * s'il est dans le prolongement (côté coupé en deux), seul le sommet de
+ * coupe glisse le long du mur, tant qu'il ne dépasse pas le sommet suivant.
  */
 export function changerLongueurCote(piece: Piece, cote: number, longueur: number, garderAngles = true): Piece {
   const n = piece.sommets.length;
@@ -175,9 +183,15 @@ export function changerLongueurCote(piece: Piece, cote: number, longueur: number
   const u = direction(a, b);
   const d = { x: u.x * (longueur - l), y: u.y * (longueur - l) };
   const deplaces = new Set([iFin]);
-  if (garderAngles) {
-    const iSuivant = (cote + 2) % n;
-    if (iSuivant !== cote) deplaces.add(iSuivant);
+  const glisse = dansLeProlongement(piece.sommets, iFin, u) && longueur - l < longueurCote(piece.sommets, iFin) - 1;
+  if (garderAngles && !glisse) {
+    // On translate le premier côté suivant qui n'est pas dans le prolongement.
+    let j = iFin;
+    while (dansLeProlongement(piece.sommets, j, u) && (j + 1) % n !== cote) {
+      j = (j + 1) % n;
+      deplaces.add(j);
+    }
+    if ((j + 1) % n !== cote) deplaces.add((j + 1) % n);
   }
   const sommets = piece.sommets.map((s, i) =>
     deplaces.has(i) ? { ...s, x: arrondi(s.x + d.x, 0.01), y: arrondi(s.y + d.y, 0.01) } : { ...s },

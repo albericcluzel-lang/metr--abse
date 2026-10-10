@@ -205,6 +205,33 @@ describe('changer la longueur d’un côté', () => {
     expect(ouv(p, 'f').position).toBeCloseTo(150, 1);
   });
 
+  it('ne déplace que le sommet de coupe quand le côté suivant est dans le prolongement', () => {
+    const coupe = insererSommet(pieceRectangle('Séjour', 400, 300), 0);
+    const p = changerLongueurCote(coupe, 0, 250);
+    expect(p.sommets.map(({ x, y }) => [x, y])).toEqual([
+      [0, 0],
+      [250, 0],
+      [400, 0],
+      [400, 300],
+      [0, 300],
+    ]);
+    expect(aire(p.sommets)).toBe(120000);
+    // Raccourcir aussi : le mur garde sa longueur totale.
+    expect(changerLongueurCote(coupe, 0, 120).sommets[1]).toMatchObject({ x: 120, y: 0 });
+  });
+
+  it('allonge tout le mur quand le sommet de coupe dépasserait le sommet suivant', () => {
+    const coupe = insererSommet(pieceRectangle('Séjour', 400, 300), 0);
+    const p = changerLongueurCote(coupe, 0, 450);
+    expect(p.sommets.map(({ x, y }) => [x, y])).toEqual([
+      [0, 0],
+      [450, 0],
+      [650, 0],
+      [650, 300],
+      [0, 300],
+    ]);
+  });
+
   it('ignore une longueur nulle ou invalide', () => {
     const base = sejour();
     expect(changerLongueurCote(base, 0, 0)).toBe(base);
