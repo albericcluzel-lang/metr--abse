@@ -538,9 +538,14 @@
 
 .plan2d-rotation {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  /* minmax(0, …) : le champ rétrécit au lieu de pousser « +90° » hors du panneau. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
+}
+
+.plan2d-rotation .champ {
+  min-width: 0;
 }
 
 .plan2d-rotation .bouton {

@@ -252,3 +252,27 @@ test('glisser une pièce petite à l’écran depuis son intérieur la déplace 
   expect(apres).toEqual(avant.map(([x, y]) => [x + dx, y + dy]));
   await expect(page.getByRole('heading', { name: 'Cuisine', exact: true })).toBeVisible();
 });
+
+test('panneau d’un équipement : la ligne Rotation tient dans la largeur du panneau', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Rotation e2e',
+    `const sdb = fabrique.pieceRectangle('Salle de bain', 300, 250);
+    sdb.equipements.push(fabrique.nouvelEquipement('baignoire', { x: 150, y: 35 }));
+    projet.niveaux[0].actuel.pieces.push(sdb);`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await toucher(page, { x: 150, y: 35 });
+  await expect(page.getByRole('heading', { name: 'Baignoire' })).toBeVisible();
+  const panneau = page.locator(tactile() ? '.feuille' : '.plan2d-panneau');
+  const plus = page.getByRole('button', { name: 'Tourner de 90° vers la droite' });
+  const bp = (await panneau.boundingBox())!;
+  for (const b of [plus, page.getByRole('button', { name: 'Tourner de 90° vers la gauche' })]) {
+    const bb = (await b.boundingBox())!;
+    expect(bb.x).toBeGreaterThanOrEqual(bp.x);
+    expect(bb.x + bb.width).toBeLessThanOrEqual(bp.x + bp.width);
+  }
+  // Rien ne défile en largeur.
+  const corps = page.locator(tactile() ? '.feuille-corps' : '.plan2d-panneau-corps');
+  expect(await corps.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
+});
