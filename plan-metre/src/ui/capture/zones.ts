@@ -73,10 +73,14 @@ export function zoneLaser(points: readonly Point[], hauteur: number, nom = ''): 
   return { id: nouvelId(), methode: 'laser', nom, points: points.map((p) => ({ x: p.x, y: p.y })), hauteur };
 }
 
-/** Zones d'une session de réalité augmentée (même repère, identifiant de session commun). */
+/**
+ * Zones d'une session de réalité augmentée (même repère, identifiant de
+ * session commun). L'identifiant de chaque zone est stable : la même zone
+ * convertie à nouveau (après une correction des ancres) remplace la première.
+ */
 export function zonesDepuisRA(zones: readonly ZoneTermineeRA[], sessionRA: string): ZoneRelevee[] {
   return zones.map((z) => ({
-    id: nouvelId(),
+    id: `${sessionRA}-${z.id}`,
     methode: 'ra',
     nom: '',
     points: anglesEnPlan(z.angles),

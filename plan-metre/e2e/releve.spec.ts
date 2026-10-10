@@ -182,19 +182,53 @@ async function simulerSessionRA(page: Page) {
           session.visee = p;
           rappels.surVisee({ point: p, suivi: true, estime: false });
         },
+        /** Corrections des ancres par le suivi. */
+        ajuster(corrections: unknown) {
+          rappels.surAjustement(corrections);
+        },
       };
       return session;
     };
   });
 }
 
-test('réalité augmentée (session simulée) : deux pièces dans le même repère', async ({ page }) => {
+/** Navigateur compatible WebXR (la session elle-même est simulée par simulerSessionRA). */
+async function simulerNavigateurRA(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'xr', {
       configurable: true,
       value: { isSessionSupported: async () => true, requestSession: async () => Promise.reject(new Error('non simulé')) },
     });
   });
+}
+
+/** Démarre une session simulée et renvoie la fonction de visée (m, repère de la session). */
+async function demarrerSessionRA(page: Page) {
+  await simulerSessionRA(page);
+  await page.getByRole('button', { name: 'Réalité augmentée' }).click();
+  await page.getByRole('button', { name: 'Démarrer la réalité augmentée' }).click();
+  await expect(page.getByRole('button', { name: 'Placer un angle' })).toBeVisible();
+  return (x: number, z: number, y = -1.4) => page.evaluate((p) => (window as any).__ra.viser(p), { x, y, z });
+}
+
+/** Relève une pièce (angles au sol, hauteur saisie) et termine la zone. */
+async function releverPieceRA(page: Page, viser: (x: number, z: number) => Promise<unknown>, angles: number[][]) {
+  for (const [x, z] of angles) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  await page.getByRole('button', { name: 'Fermer la pièce' }).click();
+  await page.getByRole('button', { name: 'Saisir la hauteur' }).click();
+  await page.getByRole('button', { name: 'Valider', exact: true }).click();
+  await page.getByRole('button', { name: 'Terminer la zone' }).click();
+}
+
+function lireBrouillon(page: Page, id: string): Promise<{ zones: { sessionRA?: string; points: { x: number; y: number }[] }[] } | null> {
+  return page.evaluate((id) => JSON.parse(sessionStorage.getItem(`abse-releve-${id}`) ?? 'null'), id);
+}
+
+test('réalité augmentée (session simulée) : deux pièces dans le même repère', async ({ page }) => {
+  await simulerNavigateurRA(page);
   const id = await creerChantier(page, 'RA simulée');
   await page.goto(`./#/chantier/${id}/releve`);
   await simulerSessionRA(page);
@@ -305,4 +339,31 @@ test('réalité augmentée : refus de la caméra expliqué en français', async 
   // On peut revenir et choisir une autre méthode.
   await page.getByRole('button', { name: 'Retour' }).click();
   await expect(page.getByRole('button', { name: 'Mètre laser' })).toBeVisible();
+});
+
+test('réalité augmentée (session simulée) : chaque zone terminée est protégée sans attendre la fin de la session', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'RA rechargée');
+  await page.goto(`./#/chantier/${id}/releve`);
+  const viser = await demarrerSessionRA(page);
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await expect(page.getByText('Zone 1 terminée')).toBeVisible();
+  // Toujours en session : la zone est déjà dans le brouillon…
+  expect((await lireBrouillon(page, id))?.zones).toHaveLength(1);
+  // … et y suit les corrections du suivi (angle 2 déplacé de 20 cm).
+  await page.evaluate(() => (window as any).__ra.ajuster([{ id: 2, point: { x: 4.2, y: -1.4, z: 0 } }]));
+  await expect.poll(async () => (await lireBrouillon(page, id))?.zones.map((z) => z.points[1].x)).toEqual([420]);
+
+  // Rechargement en pleine session (mise à jour de l'appli, onglet tué par Android).
+  await page.reload();
+  await expect(page.getByText('Relevé en cours retrouvé : 1 zone')).toBeVisible();
+  const zones = page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem');
+  await expect(zones).toHaveCount(1);
+  await expect(zones.first()).toContainText('12,30 m²');
+  await expect(zones.first()).toContainText('Réalité augmentée');
 });

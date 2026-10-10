@@ -170,8 +170,9 @@ describe('zones successives dans la même session', () => {
     expect(e.zones).toHaveLength(1);
     expect(e.zones[0]).toMatchObject({ hauteur: 250, hauteurMesuree: false });
     expect(e.zones[0].sol).toBeCloseTo(SOL);
-    // Les angles des zones terminées gardent leur identifiant (ancres).
+    // Les angles des zones terminées gardent leur identifiant (ancres) ; la zone a le sien (brouillon).
     expect(e.zones[0].angles[0]).toEqual({ id: 1, x: 0, y: SOL, z: 0 });
+    expect(e.zones[0].id).toBe(5);
 
     // Pas d'angle tant qu'on n'a pas demandé une nouvelle zone.
     expect(reduireRA(e, placer(5, 0)).angles).toHaveLength(0);

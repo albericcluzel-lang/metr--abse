@@ -48,6 +48,7 @@ describe('création des zones', () => {
     const zones = zonesDepuisRA(
       [
         {
+          id: 4,
           angles: [
             { id: 1, x: 0, y: -1.4, z: 0 },
             { id: 2, x: 1, y: -1.4, z: 0 },
@@ -60,7 +61,7 @@ describe('création des zones', () => {
       ],
       'session-a',
     );
-    expect(zones[0]).toMatchObject({ methode: 'ra', sessionRA: 'session-a', hauteur: 250 });
+    expect(zones[0]).toMatchObject({ id: 'session-a-4', methode: 'ra', sessionRA: 'session-a', hauteur: 250 });
     expect(zones[0].points).toEqual([
       { x: 0, y: 0 },
       { x: 100, y: 0 },

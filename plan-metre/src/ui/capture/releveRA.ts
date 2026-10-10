@@ -27,6 +27,8 @@ export interface AngleRA extends Point3 {
 export type EtapeRA = 'angles' | 'hauteur' | 'zone-terminee';
 
 export interface ZoneTermineeRA {
+  /** Identifiant dans la session (stable malgré les corrections des ancres). */
+  id: number;
   /** Angles de la zone ; leurs ancres continuent de les corriger jusqu'à la fin de la session. */
   angles: AngleRA[];
   /** Altitude du sol de la zone (m, repère du monde). */
@@ -194,6 +196,7 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
       if (etat.etape !== 'hauteur') return etat;
       if (etat.hauteur === null) return { ...etat, message: 'Mesurez ou saisissez la hauteur sous plafond.' };
       const zone: ZoneTermineeRA = {
+        id: etat.prochainId,
         angles: etat.angles,
         sol: altitudeSol(etat) ?? 0,
         hauteur: etat.hauteur,
@@ -207,6 +210,7 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
         hauteurMesuree: false,
         zones: [...etat.zones, zone],
         message: null,
+        prochainId: etat.prochainId + 1,
       };
     }
     case 'nouvelle-zone':
@@ -299,6 +303,7 @@ export function cloturerSession(etat: EtatRA, hauteurDefaut: number): BilanSessi
     return { zones, zoneEnCoursConservee: false, anglesPerdus: etat.angles.length };
   }
   zones.push({
+    id: etat.prochainId,
     angles: etat.angles,
     sol: altitudeSol(etat) ?? 0,
     hauteur: etat.hauteur ?? hauteurDefaut,

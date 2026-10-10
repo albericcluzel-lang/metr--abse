@@ -59,12 +59,19 @@ function consigne(etat: EtatRA, visee: Visee): { titre: string; texte: string } 
 
 export function EcranRA({
   hauteurDefaut,
+  onZones,
   onTerminer,
   onRetour,
 }: {
   hauteurDefaut: number;
+  /**
+   * Zones de la session `sessionRA`, qui remplacent celles déjà transmises
+   * pour cette session : à chaque zone terminée ou corrigée par le suivi, et
+   * en fin de session (zone en cours comprise).
+   */
+  onZones: (sessionRA: string, zones: ZoneRelevee[]) => void;
   /** Fin de session avec au moins une zone ; `message` à afficher ensuite. */
-  onTerminer: (zones: ZoneRelevee[], message: string | null) => void;
+  onTerminer: (message: string | null) => void;
   onRetour: () => void;
 }) {
   const racine = useRef<HTMLDivElement>(null);
@@ -73,7 +80,7 @@ export function EcranRA({
   const sessionRef = useRef<SessionRA | null>(null);
   const idSession = useRef(nouvelId());
   const monte = useRef(false);
-  const props = useRef({ hauteurDefaut, onTerminer });
+  const props = useRef({ hauteurDefaut, onZones, onTerminer });
   const [enSession, setEnSession] = useState(false);
   const [demarrage, setDemarrage] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -84,13 +91,19 @@ export function EcranRA({
   const [confirmerQuitter, setConfirmerQuitter] = useState(false);
 
   useEffect(() => {
-    props.current = { hauteurDefaut, onTerminer };
+    props.current = { hauteurDefaut, onZones, onTerminer };
   });
 
   useEffect(() => {
     etatRef.current = etat;
     sessionRef.current?.dessiner(etat);
   }, [etat]);
+
+  // Chaque zone terminée (ou corrigée par le suivi) part aussitôt dans le
+  // brouillon : un rechargement de la page en pleine session ne la perd pas.
+  useEffect(() => {
+    if (etat.zones.length > 0) props.current.onZones(idSession.current, zonesDepuisRA(etat.zones, idSession.current));
+  }, [etat.zones]);
 
   // Quitter l'écran pendant une session : on la termine proprement.
   useEffect(() => {
@@ -132,10 +145,11 @@ export function EcranRA({
     if (bilan.anglesPerdus > 0) {
       details.push(`${pluriel(bilan.anglesPerdus, 'angle')} de la pièce en cours n’ont pas pu être gardés (pièce incomplète).`);
     }
+    if (zones.length > 0) props.current.onZones(idSession.current, zones);
     // Une nouvelle session aura un autre repère.
     envoyer({ type: 'reinitialiser' });
     idSession.current = nouvelId();
-    if (zones.length > 0) props.current.onTerminer(zones, details.join(' ') || null);
+    if (zones.length > 0) props.current.onTerminer(details.join(' ') || null);
     else if (details.length > 0) setErreur(details.join(' '));
   };
 

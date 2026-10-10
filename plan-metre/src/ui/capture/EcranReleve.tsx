@@ -90,6 +90,10 @@ function ReleveChantier({ id }: { id: string }) {
     if (message) notifier(message);
   };
 
+  // Zones d'une session de réalité augmentée : la dernière version reçue remplace la précédente.
+  const remplacerZonesRA = (sessionRA: string, nouvelles: ZoneRelevee[]) =>
+    setZones((z) => [...z.filter((x) => x.sessionRA !== sessionRA), ...nouvelles]);
+
   const abandonner = async () => {
     if (zones.length > 0) {
       const ok = await confirmer({
@@ -153,7 +157,8 @@ function ReleveChantier({ id }: { id: string }) {
         <EcranRA
           hauteurDefaut={hauteurDefaut}
           onRetour={() => setEtape(zones.length > 0 ? 'zones' : 'methodes')}
-          onTerminer={(z, message) => ajouterZones(z, message)}
+          onZones={remplacerZonesRA}
+          onTerminer={(message) => ajouterZones([], message)}
         />
       );
     case 'finalisation':
