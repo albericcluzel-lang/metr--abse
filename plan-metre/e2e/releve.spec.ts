@@ -499,3 +499,52 @@ test('retour du téléphone en réalité augmentée (session simulée) : termine
   await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(1);
   await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
 });
+
+/** Brouillon de relevé de `n` pièces rectangulaires (300 à 460 × 250 à 350 cm), comme après n relevés. */
+async function brouillonDePieces(page: Page, id: string, n: number) {
+  await page.evaluate(
+    ({ id, n }) => {
+      const zones = Array.from({ length: n }, (_, i) => {
+        const l = 300 + ((i * 37) % 161);
+        const h = 250 + ((i * 53) % 101);
+        const points = [
+          { x: 0, y: 0 },
+          { x: l, y: 0 },
+          { x: l, y: h },
+          { x: 0, y: h },
+        ];
+        return { id: `zone-${i}`, methode: 'rectangle', nom: '', points, hauteur: 250 };
+      });
+      sessionStorage.setItem(`abse-releve-${id}`, JSON.stringify({ version: 1, zones }));
+    },
+    { id, n },
+  );
+}
+
+test('trente pièces relevées : rangées lisibles sur le plan, aperçu sans noms qui se chevauchent', async ({ page }) => {
+  const id = await creerChantier(page, 'Trente pièces');
+  await brouillonDePieces(page, id, 30);
+  await page.goto(`./#/chantier/${id}`);
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await expect(page.getByLabel('Nom de la zone 30')).toHaveValue('Pièce 30');
+
+  // Aperçu : les noms affichés ne se chevauchent pas.
+  const etiquettes = await page
+    .locator('.releve-etiquette')
+    .evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom })));
+  for (let i = 0; i < etiquettes.length; i++) {
+    for (let j = i + 1; j < etiquettes.length; j++) {
+      const a = etiquettes[i];
+      const b = etiquettes[j];
+      expect(a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1).toBe(false);
+    }
+  }
+
+  await page.getByRole('button', { name: 'Sauvegarder et continuer' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  const { pieces } = await piecesRdc(page);
+  expect(pieces).toHaveLength(30);
+  // Plan : rangées à la forme de l'écran, chaque pièce nommée sans avoir à zoomer.
+  await expect(page.locator('[data-etiquette]')).toHaveCount(30);
+});

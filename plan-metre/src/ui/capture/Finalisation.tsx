@@ -20,7 +20,7 @@ import { notifier } from '../commun/dialogues';
 import { Vue3D } from '../plan3d/Vue3D';
 import { ApercuAssemblage, surfaceM2, VignetteZone } from './Apercus';
 import { useRetourSysteme } from './retourSysteme';
-import { boiteDesPieces, construirePieces, nomsParDefaut, placerZones, type ZoneRelevee } from './zones';
+import { boitesDesPieces, construirePieces, nomsParDefaut, placerZones, type ZoneRelevee } from './zones';
 
 const NOMS_NIVEAUX = ['Sous-sol', 'RDC', 'R+1', 'R+2', 'R+3', 'Combles', 'Mezzanine'];
 const NOUVEAU_NIVEAU = '__nouveau__';
@@ -75,13 +75,15 @@ export function Finalisation({
     Object.fromEntries(zones.map((z) => [z.id, Math.round(z.hauteur)])),
   );
   const [vue, setVue] = useState<'2d' | '3d'>('2d');
+  // Pièces rangées pour tenir lisiblement dans l'écran du plan (portrait sur téléphone).
+  const [rapport] = useState(() => Math.min(2.5, Math.max(0.4, window.innerWidth / Math.max(1, window.innerHeight))));
   useRetourSysteme(onRetour);
 
   const niveau = niveaux.find((n) => n.id === niveauId) ?? null;
   const cible = planCible(niveau, variante);
   const placees = useMemo(
-    () => placerZones(zones, { redresser, existant: boiteDesPieces(cible.pieces, projet.catalogue) }),
-    [zones, redresser, cible, projet.catalogue],
+    () => placerZones(zones, { redresser, rapport, existantes: boitesDesPieces(cible.pieces, projet.catalogue) }),
+    [zones, redresser, rapport, cible, projet.catalogue],
   );
   const nouvelles = useMemo(
     () => construirePieces(placees, { noms, hauteurs, typeMurDefautId: typeMurId }),
@@ -107,7 +109,7 @@ export function Finalisation({
       }
       if (variante === 'renove' && !n.renove) n.renove = copierPlanPourRenovation(n.actuel);
       const plan = variante === 'renove' ? n.renove! : n.actuel;
-      const poses = placerZones(zones, { redresser, existant: boiteDesPieces(plan.pieces, p.catalogue) });
+      const poses = placerZones(zones, { redresser, rapport, existantes: boitesDesPieces(plan.pieces, p.catalogue) });
       plan.pieces.push(...construirePieces(poses, { noms, hauteurs, typeMurDefautId: typeMurId }));
       idNiveau = n.id;
     });
