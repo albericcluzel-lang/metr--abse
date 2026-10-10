@@ -332,3 +332,46 @@ test('outils ouverture et équipement : tous les types se voient sans défiler',
     }
   }
 });
+
+test('la feuille de propriétés laisse la barre du bas utilisable, même au retour de la 3D', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Barre du bas e2e',
+    `projet.niveaux[0].actuel.pieces.push(fabrique.pieceRectangle('Cuisine', 350, 280));`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await toucher(page, { x: 175, y: -4 });
+  const titre = page.getByRole('heading', { name: 'Côté 1 · Cuisine' });
+  await expect(titre).toBeVisible();
+  await page.getByRole('button', { name: 'Vue 3D' }).click();
+  await page.getByRole('button', { name: 'Plan 2D' }).click();
+  await expect(titre).toBeVisible();
+  const nav = page.locator('.nav-bas');
+  for (const nom of ['Photos', 'Ajouter une pièce', 'Métré']) {
+    const bb = (await nav.getByRole('button', { name: nom }).boundingBox())!;
+    const libre = await page.evaluate(
+      ([x, y]) => !!document.elementFromPoint(x, y)?.closest('.nav-bas'),
+      [bb.x + bb.width / 2, bb.y + bb.height / 2],
+    );
+    expect(libre, nom).toBe(true);
+  }
+  await nav.getByRole('button', { name: 'Photos' }).click();
+  await expect(page).toHaveURL(/photos/);
+});
+
+test('une seule feuille à la fois : « Nouveau niveau » ferme la sélection', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Feuilles e2e',
+    `const sdb = fabrique.pieceRectangle('Salle de bain', 300, 250);
+    sdb.equipements.push(fabrique.nouvelEquipement('baignoire', { x: 150, y: 35 }));
+    projet.niveaux[0].actuel.pieces.push(sdb);`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await toucher(page, { x: 150, y: 35 });
+  await expect(page.getByRole('heading', { name: 'Baignoire' })).toBeVisible();
+  await page.getByLabel('Niveau', { exact: true }).selectOption('__ajouter__');
+  await expect(page.getByRole('dialog', { name: 'Nouveau niveau' })).toBeVisible();
+  await expect(page.locator('.plan2d-proprietes')).toHaveCount(0);
+  await expect(page.locator('.feuille')).toHaveCount(1);
+});

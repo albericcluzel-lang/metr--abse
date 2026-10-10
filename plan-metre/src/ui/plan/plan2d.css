@@ -507,9 +507,21 @@
 
 /* ─── Panneau de propriétés ───────────────────────────────────────────── */
 
-/* Sur téléphone (feuille du bas sans voile) : on laisse le plan visible. */
+/*
+ * Sur téléphone (feuille du bas sans voile) : on laisse le plan visible, et
+ * la feuille s'arrête au-dessus de la barre du bas (Photos, +, Métré), qui
+ * reste utilisable tant qu'un élément est sélectionné. Le bouton « + » de la
+ * barre déborde sur la feuille : le corps garde de la place pour lui.
+ */
 .feuille:has(.plan2d-proprietes) {
   max-height: min(42dvh, 400px);
+  bottom: calc(var(--hauteur-nav) + var(--zone-sure-bas));
+  padding-bottom: 0;
+  z-index: 19;
+}
+
+.feuille:has(.plan2d-proprietes) .feuille-corps {
+  padding-bottom: 30px;
 }
 
 .plan2d-panneau {
