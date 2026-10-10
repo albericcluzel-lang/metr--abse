@@ -375,3 +375,47 @@ test('une seule feuille à la fois : « Nouveau niveau » ferme la sélection', 
   await expect(page.locator('.plan2d-proprietes')).toHaveCount(0);
   await expect(page.locator('.feuille')).toHaveCount(1);
 });
+
+test('la feuille d’un nouvel élément s’ouvre depuis le haut', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Défilement e2e',
+    `projet.niveaux[0].actuel.pieces.push(fabrique.pieceRectangle('Salon', 500, 400));`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await toucher(page, { x: 250, y: -4 });
+  await expect(page.getByRole('heading', { name: 'Côté 1 · Salon' })).toBeVisible();
+  const corps = page.locator(tactile() ? '.feuille-corps' : '.plan2d-panneau-corps');
+  await corps.evaluate((el) => (el.scrollTop = el.scrollHeight));
+  await page.getByRole('button', { name: 'Ajouter une porte' }).click();
+  await expect(page.getByRole('heading', { name: 'Porte · Salon' })).toBeVisible();
+  await expect.poll(() => corps.evaluate((el) => el.scrollTop)).toBe(0);
+});
+
+test('clavier ouvert : la pièce en cours de modification reste visible au-dessus de la feuille', async ({ page }) => {
+  test.skip(!tactile(), 'clavier virtuel : téléphone seulement');
+  const id = await creerChantier(
+    page,
+    'Clavier e2e',
+    `projet.niveaux[0].actuel.pieces.push(
+      fabrique.pieceRectangle('Salon', 500, 400),
+      fabrique.pieceRectangle('Chambre', 350, 300, { origine: { x: 0, y: 500 } }),
+    );`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  await toucher(page, { x: 175, y: 600 });
+  await expect(page.getByRole('heading', { name: 'Chambre', exact: true })).toBeVisible();
+  await page.locator('.plan2d-proprietes').getByLabel('Nom', { exact: true }).click();
+  // Le clavier réduit la fenêtre (interactive-widget=resizes-content).
+  const vp = page.viewportSize()!;
+  await page.setViewportSize({ width: vp.width, height: vp.height - 340 });
+  const etiquette = page.locator('[data-etiquette]').filter({ hasText: 'Chambre' });
+  await expect
+    .poll(async () => {
+      const e = await etiquette.boundingBox();
+      const f = await page.locator('.feuille').boundingBox();
+      const svg = await page.locator('svg.plan2d-svg').boundingBox();
+      return !!e && !!f && !!svg && e.y >= svg.y && e.y + e.height <= f.y;
+    })
+    .toBe(true);
+});

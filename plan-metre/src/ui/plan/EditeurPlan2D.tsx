@@ -269,7 +269,8 @@ export function EditeurPlan2D() {
   }, [definirVue]);
 
   // Sur téléphone, la feuille de propriétés couvre le bas de l'écran : si la
-  // sélection passe dessous, on remonte le plan pour la garder visible.
+  // sélection passe dessous, on remonte le plan pour la garder visible. Aussi
+  // quand le plan rétrécit (clavier ouvert pour saisir un champ de la feuille).
   useEffect(() => {
     if (large || !selection || outil !== 'selection') return;
     const id = requestAnimationFrame(() => {
@@ -289,7 +290,7 @@ export function EditeurPlan2D() {
       definirVue({ ...v, ty: v.ty - (s.y - Math.max(70, limite * 0.5)) });
     });
     return () => cancelAnimationFrame(id);
-  }, [selection, large, outil, definirVue]);
+  }, [selection, large, outil, taille, definirVue]);
 
   const zoomerAuCentre = (facteur: number) => {
     const t = tailleRef.current;

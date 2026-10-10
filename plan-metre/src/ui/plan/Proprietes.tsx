@@ -1,7 +1,7 @@
 // Panneau de propriétés de la sélection : feuille du bas (sans voile) sur
 // téléphone, panneau latéral à droite à partir de 900 px de large.
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { trouverTypeMur } from '../../geometrie/piece';
 import { aire, longueurCote, perimetre } from '../../geometrie/polygone';
 import { formaterValeur } from '../../metre/calcul';
@@ -135,11 +135,18 @@ export function PanneauProprietes({ large }: { large: boolean }) {
   const photos = useEtat((e) => e.photos);
   const fermer = useCallback(() => useEtat.getState().selectionner(null), []);
   useFermerSousAutreFeuille(!!selection);
+  const cle = selection ? cleSelection(selection) : null;
+  // La feuille (ou le panneau) reste ouverte d'une sélection à l'autre : le
+  // nouvel élément s'affiche depuis le haut, pas au défilement du précédent.
+  const contenuRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    contenuRef.current?.closest('.feuille-corps, .plan2d-panneau-corps')?.scrollTo(0, 0);
+  }, [cle]);
   if (!projet || !plan || !selection) return null;
   const contenu = contenuSelection(selection, plan, projet, photos);
   if (!contenu) return null;
   const corps = (
-    <div className="plan2d-proprietes" key={cleSelection(selection)}>
+    <div className="plan2d-proprietes" key={cle} ref={contenuRef}>
       {contenu.corps}
     </div>
   );
