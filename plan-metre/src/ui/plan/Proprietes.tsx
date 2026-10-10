@@ -112,12 +112,29 @@ function contenuSelection(
   }
 }
 
+/**
+ * Une seule feuille à la fois : quand une feuille modale s'ouvre par-dessus
+ * le plan (ex. « Nouveau niveau »), la sélection est fermée.
+ */
+function useFermerSousAutreFeuille(actif: boolean) {
+  useEffect(() => {
+    if (!actif) return;
+    const observateur = new MutationObserver(() => {
+      if (document.querySelector('.feuille[aria-modal="true"]')) useEtat.getState().selectionner(null);
+    });
+    // Les feuilles sont rendues directement dans <body>.
+    observateur.observe(document.body, { childList: true });
+    return () => observateur.disconnect();
+  }, [actif]);
+}
+
 export function PanneauProprietes({ large }: { large: boolean }) {
   const projet = useEtat((e) => e.projet);
   const selection = useEtat((e) => e.selection);
   const plan = useEtat((e) => planCourant(e));
   const photos = useEtat((e) => e.photos);
   const fermer = useCallback(() => useEtat.getState().selectionner(null), []);
+  useFermerSousAutreFeuille(!!selection);
   if (!projet || !plan || !selection) return null;
   const contenu = contenuSelection(selection, plan, projet, photos);
   if (!contenu) return null;
