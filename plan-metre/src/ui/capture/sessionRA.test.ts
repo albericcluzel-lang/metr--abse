@@ -263,3 +263,33 @@ describe('premier angle', () => {
     expect(rappels.surVisee).toHaveBeenLastCalledWith(expect.objectContaining({ estime: true }));
   });
 });
+
+describe('ancres', () => {
+  const attendreAncres = () => new Promise((r) => setTimeout(r, 0));
+
+  it('garde les ancres des zones terminées et les corrige comme celles de la zone en cours', async () => {
+    const { ra, session, rendu, rappels } = await demarrer();
+    const temps = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    let e = jouer([placer(0, 0), placer(4, 0), placer(4, 3), placer(0, 3)]);
+    ra.dessiner(e);
+    rendu.imageSession(image(session));
+    await attendreAncres();
+    expect(session.ancres).toHaveLength(4);
+
+    e = jouer([{ type: 'fermer' }, { type: 'saisir-hauteur', hauteur: 250 }, { type: 'terminer-zone' }, { type: 'nouvelle-zone' }, placer(4.1, 0)], e);
+    ra.dessiner(e);
+    rendu.imageSession(image(session));
+    await attendreAncres();
+    expect(session.ancres.map((a) => a.supprimee)).toEqual([false, false, false, false, false]);
+
+    // Le suivi affine sa carte : l'angle 2 (zone 1) se déplace de 20 cm.
+    session.ancres[1].position = p(4.2, 0);
+    temps.mockReturnValue(2000);
+    rendu.imageSession(image(session));
+    expect(rappels.surAjustement).toHaveBeenLastCalledWith([{ id: 2, point: p(4.2, 0) }]);
+
+    // Les ancres ne sont supprimées qu'avec la session.
+    await ra.terminer();
+    expect(session.ancres.every((a) => a.supprimee)).toBe(true);
+  });
+});

@@ -27,7 +27,8 @@ export interface AngleRA extends Point3 {
 export type EtapeRA = 'angles' | 'hauteur' | 'zone-terminee';
 
 export interface ZoneTermineeRA {
-  angles: Point3[];
+  /** Angles de la zone ; leurs ancres continuent de les corriger jusqu'à la fin de la session. */
+  angles: AngleRA[];
   /** Altitude du sol de la zone (m, repère du monde). */
   sol: number;
   /** Hauteur sous plafond (cm). */
@@ -193,7 +194,7 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
       if (etat.etape !== 'hauteur') return etat;
       if (etat.hauteur === null) return { ...etat, message: 'Mesurez ou saisissez la hauteur sous plafond.' };
       const zone: ZoneTermineeRA = {
-        angles: etat.angles.map(({ x, y, z }) => ({ x, y, z })),
+        angles: etat.angles,
         sol: altitudeSol(etat) ?? 0,
         hauteur: etat.hauteur,
         hauteurMesuree: etat.hauteurMesuree,
@@ -212,16 +213,30 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
       if (etat.etape !== 'zone-terminee') return etat;
       return { ...etat, etape: 'angles', message: null };
     case 'ajuster-angles': {
-      // Corrections des ancres WebXR : le suivi a affiné la position d'angles déjà posés.
+      // Corrections des ancres WebXR : le suivi a affiné la position d'angles
+      // déjà posés, ceux de la zone en cours comme ceux des zones terminées
+      // (toutes les zones de la session restent dans le même repère).
       const parId = new Map(action.corrections.map((c) => [c.id, c.point]));
-      let change = false;
-      const angles = etat.angles.map((a) => {
-        const p = parId.get(a.id);
-        if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) return a;
-        change = true;
-        return { id: a.id, x: p.x, y: p.y, z: p.z };
+      const ajuster = (angles: AngleRA[]): AngleRA[] => {
+        let change = false;
+        const r = angles.map((a) => {
+          const p = parId.get(a.id);
+          if (!p || ![p.x, p.y, p.z].every(Number.isFinite)) return a;
+          change = true;
+          return { id: a.id, x: p.x, y: p.y, z: p.z };
+        });
+        return change ? r : angles;
+      };
+      const angles = ajuster(etat.angles);
+      let zonesChangees = false;
+      const zones = etat.zones.map((z) => {
+        const a = ajuster(z.angles);
+        if (a === z.angles) return z;
+        zonesChangees = true;
+        return { ...z, angles: a, sol: altitudeAngles(a) ?? z.sol };
       });
-      return change ? { ...etat, angles } : etat;
+      if (angles === etat.angles && !zonesChangees) return etat;
+      return { ...etat, angles, zones: zonesChangees ? zones : etat.zones };
     }
     case 'signaler':
       return { ...etat, message: action.message };
@@ -284,7 +299,7 @@ export function cloturerSession(etat: EtatRA, hauteurDefaut: number): BilanSessi
     return { zones, zoneEnCoursConservee: false, anglesPerdus: etat.angles.length };
   }
   zones.push({
-    angles: etat.angles.map(({ x, y, z }) => ({ x, y, z })),
+    angles: etat.angles,
     sol: altitudeSol(etat) ?? 0,
     hauteur: etat.hauteur ?? hauteurDefaut,
     hauteurMesuree: etat.hauteur !== null && etat.hauteurMesuree,

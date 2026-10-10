@@ -170,8 +170,8 @@ describe('zones successives dans la même session', () => {
     expect(e.zones).toHaveLength(1);
     expect(e.zones[0]).toMatchObject({ hauteur: 250, hauteurMesuree: false });
     expect(e.zones[0].sol).toBeCloseTo(SOL);
-    // Les angles des zones terminées ne portent plus d'identifiant d'ancre.
-    expect(e.zones[0].angles[0]).toEqual({ x: 0, y: SOL, z: 0 });
+    // Les angles des zones terminées gardent leur identifiant (ancres).
+    expect(e.zones[0].angles[0]).toEqual({ id: 1, x: 0, y: SOL, z: 0 });
 
     // Pas d'angle tant qu'on n'a pas demandé une nouvelle zone.
     expect(reduireRA(e, placer(5, 0)).angles).toHaveLength(0);
@@ -201,6 +201,15 @@ describe('ajustement des angles par les ancres', () => {
     expect(r.angles[1]).toEqual({ id: 2, x: 4.02, y: SOL, z: 0.01 });
     expect(r.angles[0]).toBe(e.angles[0]);
   });
+  it('corrige aussi les zones terminées de la session, et leur sol', () => {
+    const e = jouer([...rectangle, { type: 'fermer' }, { type: 'saisir-hauteur', hauteur: 250 }, { type: 'terminer-zone' }, { type: 'nouvelle-zone' }, placer(5, 0)]);
+    const corrections = [1, 2, 3, 4].map((id) => ({ id, point: { ...e.zones[0].angles[id - 1], y: SOL + 0.02 } }));
+    const r = reduireRA(e, { type: 'ajuster-angles', corrections: [...corrections, { id: 2, point: p(4.2, 0, SOL + 0.02) }] });
+    expect(r.zones[0].angles[1]).toEqual({ id: 2, x: 4.2, y: SOL + 0.02, z: 0 });
+    expect(r.zones[0].sol).toBeCloseTo(SOL + 0.02);
+    expect(r.angles).toBe(e.angles);
+  });
+
   it('ignore les identifiants inconnus sans changer l’état', () => {
     const e = jouer(rectangle);
     expect(reduireRA(e, { type: 'ajuster-angles', corrections: [{ id: 99, point: p(1, 1) }] })).toBe(e);

@@ -131,6 +131,8 @@ export class SessionRA {
   private derniereVisee = { t: 0, present: false, suivi: false, estime: false };
   private derniersAjustements = 0;
   private readonly ancres = new Map<number, XRAnchor>();
+  /** Angles suivis par des ancres : zone en cours et zones terminées de la session. */
+  private anglesAncres: readonly AngleRA[] = [];
   private readonly ancresDemandees = new Map<number, Point3>();
   private readonly ancresEnCours = new Set<number>();
   private ancresPossibles: boolean;
@@ -260,16 +262,18 @@ export class SessionRA {
     this.etat = etat;
     // Pièce fermée (étape hauteur) : le segment de fermeture est dessiné.
     const ferme = etat.etape === 'hauteur';
-    if (etat.angles !== this.anglesDessines || ferme !== this.fermeDessine) {
+    const anglesChanges = etat.angles !== this.anglesDessines;
+    if (anglesChanges || ferme !== this.fermeDessine) {
       this.anglesDessines = etat.angles;
       this.fermeDessine = ferme;
       this.dessinerAngles(etat.angles, ferme);
-      this.synchroniserAncres(etat.angles);
     }
-    if (etat.zones !== this.zonesDessinees) {
+    const zonesChangees = etat.zones !== this.zonesDessinees;
+    if (zonesChangees) {
       this.zonesDessinees = etat.zones;
       this.dessinerZones(etat.zones);
     }
+    if (anglesChanges || zonesChangees) this.synchroniserAncres([...etat.angles, ...etat.zones.flatMap((z) => z.angles)]);
   }
 
   /** Termine la session à la demande de l'appli. */
@@ -440,6 +444,7 @@ export class SessionRA {
   // ─── Ancres (facultatives) : le suivi corrige la position des angles ──
 
   private synchroniserAncres(angles: readonly AngleRA[]) {
+    this.anglesAncres = angles;
     if (!this.ancresPossibles) return;
     const ids = new Set(angles.map((a) => a.id));
     for (const [id, ancre] of this.ancres) {
@@ -471,7 +476,7 @@ export class SessionRA {
         promesse
           .then((ancre) => {
             this.ancresEnCours.delete(id);
-            const encore = this.anglesDessines?.some((a) => a.id === id);
+            const encore = this.anglesAncres.some((a) => a.id === id);
             if (this.nettoye || !encore) supprimerAncre(ancre);
             else this.ancres.set(id, ancre);
           })
@@ -484,7 +489,7 @@ export class SessionRA {
     this.derniersAjustements = maintenant;
     const suivies = frame.trackedAnchors;
     const corrections: { id: number; point: Point3 }[] = [];
-    for (const a of this.anglesDessines ?? []) {
+    for (const a of this.anglesAncres) {
       const ancre = this.ancres.get(a.id);
       if (!ancre || (suivies && !suivies.has(ancre))) continue;
       const pose = frame.getPose(ancre.anchorSpace, espace);

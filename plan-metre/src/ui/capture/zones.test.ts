@@ -47,7 +47,16 @@ describe('création des zones', () => {
   it('réalité augmentée : conversion m → cm et session commune', () => {
     const zones = zonesDepuisRA(
       [
-        { angles: [{ x: 0, y: -1.4, z: 0 }, { x: 1, y: -1.4, z: 0 }, { x: 1, y: -1.4, z: 1 }], sol: -1.4, hauteur: 250, hauteurMesuree: true },
+        {
+          angles: [
+            { id: 1, x: 0, y: -1.4, z: 0 },
+            { id: 2, x: 1, y: -1.4, z: 0 },
+            { id: 3, x: 1, y: -1.4, z: 1 },
+          ],
+          sol: -1.4,
+          hauteur: 250,
+          hauteurMesuree: true,
+        },
       ],
       'session-a',
     );
