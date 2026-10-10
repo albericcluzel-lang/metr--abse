@@ -479,8 +479,9 @@
   margin: 0 4px;
 }
 
-.releve-entete-apercu .segments button {
-  min-height: 36px;
+/* Cibles tactiles d'au moins 44 px (aperçu 2D / 3D, plan cible). */
+.releve-finalisation .segments button {
+  min-height: 44px;
 }
 
 .releve-carte-zone {

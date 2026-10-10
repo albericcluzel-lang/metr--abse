@@ -577,3 +577,66 @@ test('finalisation de trente pièces : la saisie d’un nom reste fluide', async
   // Aucune frappe ne bloque l’écran plus de 150 ms (260 à 480 ms par touche avant correction, moins de 70 ms après).
   expect(Math.max(0, ...longues)).toBeLessThan(150);
 });
+
+/** Cibles tactiles visibles de moins de 44 px de haut ou de large (case à cocher : son libellé). */
+function petitesCibles(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href]')].flatMap((el) => {
+      const cible = el instanceof HTMLInputElement && el.type === 'checkbox' ? (el.closest('label') ?? el) : el;
+      const r = cible.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (r.width === 0 || r.height === 0 || style.visibility === 'hidden') return [];
+      if (r.height >= 43.5 && r.width >= 43.5) return [];
+      const nom = el.getAttribute('aria-label') ?? el.textContent?.trim() ?? el.id;
+      return [`${nom || el.tagName} ${Math.round(r.width)}x${Math.round(r.height)}`];
+    }),
+  );
+}
+
+test('cibles tactiles d’au moins 44 px sur tous les écrans du relevé', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'Cibles');
+  await ouvrirReleveDepuisPlan(page, id);
+  const ecrans: Record<string, string[]> = {};
+  const mesurer = async (ecran: string) => {
+    ecrans[ecran] = await petitesCibles(page);
+  };
+  await mesurer('méthodes');
+
+  await page.getByRole('button', { name: 'Mètre laser' }).click();
+  await page.getByLabel('Côté 1', { exact: true }).fill('400');
+  await page.getByRole('button', { name: 'Tourner à droite' }).click();
+  await mesurer('mètre laser');
+  await page.getByLabel('Côté 2', { exact: true }).fill('300');
+  await page.getByRole('button', { name: 'Autre angle…' }).click();
+  await mesurer('mètre laser, autre angle');
+  await page.getByRole('button', { name: 'Annuler', exact: true }).click();
+  await page.getByRole('button', { name: 'Retour' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Abandonner la zone' }).click();
+
+  await page.getByRole('button', { name: 'Pièce rectangulaire' }).click();
+  await page.getByLabel('Longueur', { exact: true }).fill('300');
+  await page.getByLabel('Largeur', { exact: true }).fill('250');
+  await mesurer('pièce rectangulaire');
+  await page.getByRole('button', { name: 'Ajouter la zone' }).click();
+  await mesurer('zones relevées');
+
+  await page.getByRole('button', { name: 'Ajouter une zone à la capture' }).click();
+  await mesurer('ajouter une zone');
+  const viser = await demarrerSessionRA(page);
+  await mesurer('réalité augmentée, angles');
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await mesurer('réalité augmentée, zone terminée');
+  await page.getByRole('button', { name: 'Quitter' }).first().click();
+
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await page.getByLabel('Niveau', { exact: true }).selectOption({ label: '＋ Nouveau niveau…' });
+  await mesurer('finalisation');
+
+  expect(ecrans).toEqual(Object.fromEntries(Object.keys(ecrans).map((e) => [e, []])));
+});
