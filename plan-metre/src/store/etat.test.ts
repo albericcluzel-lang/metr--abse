@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { pieceRectangle } from '../model/fabrique';
-import { planCourant, useEtat } from './etat';
+import { lireSecours, planCourant, sauverEnSecours, useEtat } from './etat';
 import * as persistance from './persistance';
 
 async function reinitialiser() {
@@ -82,5 +82,56 @@ describe('état de l’appli', () => {
     expect(await persistance.listerPhotos(p.id)).toHaveLength(0);
     expect(await persistance.lireImages('ph1')).toBeUndefined();
     expect(useEtat.getState().projet).toBeNull();
+  });
+});
+
+describe('copie de secours (fermeture juste après une modification)', () => {
+  beforeEach(async () => {
+    const memoire = new Map<string, string>();
+    Object.assign(globalThis, {
+      localStorage: {
+        get length() {
+          return memoire.size;
+        },
+        key: (i: number) => [...memoire.keys()][i] ?? null,
+        getItem: (k: string) => memoire.get(k) ?? null,
+        setItem: (k: string, v: string) => void memoire.set(k, v),
+        removeItem: (k: string) => void memoire.delete(k),
+        clear: () => memoire.clear(),
+      },
+    });
+    await reinitialiser();
+  });
+
+  it('reprend au démarrage la modification que IndexedDB n’a pas reçue', async () => {
+    const p = await useEtat.getState().creerProjet({ nom: 'Secours' });
+    await useEtat.getState().ouvrirProjet(p.id);
+    useEtat.getState().modifierPlan((plan) => plan.pieces.push(pieceRectangle('Chambre', 300, 300)));
+    // La page se ferme : copie synchrone, sans attendre l'écriture IndexedDB différée.
+    sauverEnSecours();
+    expect((await persistance.lireProjet(p.id))!.niveaux[0].actuel.pieces).toHaveLength(0);
+    // Redémarrage de l'appli.
+    useEtat.setState({ projets: [], projet: null, pret: false });
+    await useEtat.getState().initialiser();
+    const repris = useEtat.getState().projets.find((x) => x.id === p.id)!;
+    expect(repris.niveaux[0].actuel.pieces[0].nom).toBe('Chambre');
+    expect((await persistance.lireProjet(p.id))!.niveaux[0].actuel.pieces).toHaveLength(1);
+    expect(lireSecours()).toHaveLength(0);
+  });
+
+  it('efface la copie une fois l’enregistrement confirmé, et ne restaure pas une copie plus ancienne', async () => {
+    const p = await useEtat.getState().creerProjet({ nom: 'Secours 2' });
+    await useEtat.getState().ouvrirProjet(p.id);
+    useEtat.getState().modifierPlan((plan) => plan.pieces.push(pieceRectangle('Bureau', 300, 300)));
+    sauverEnSecours();
+    await useEtat.getState().enregistrerMaintenant();
+    expect(lireSecours()).toHaveLength(0);
+    // Copie périmée laissée par une ancienne session : ignorée.
+    const ancienne = { ...structuredClone(useEtat.getState().projet!), modifieLe: '2000-01-01T00:00:00.000Z', nom: 'Ancien' };
+    localStorage.setItem(`abse-plan-metre:secours:${p.id}`, JSON.stringify(ancienne));
+    useEtat.setState({ projets: [], projet: null, pret: false });
+    await useEtat.getState().initialiser();
+    expect(useEtat.getState().projets.find((x) => x.id === p.id)!.nom).toBe('Secours 2');
+    expect(lireSecours()).toHaveLength(0);
   });
 });

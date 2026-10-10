@@ -72,6 +72,56 @@ const DELAI_ENREGISTREMENT = 400;
 let minuteur: ReturnType<typeof setTimeout> | null = null;
 let aEnregistrer: Projet | null = null;
 
+// Copie de secours synchrone (localStorage) : l'écriture IndexedDB est
+// asynchrone et peut ne pas aboutir si la page se ferme ou se recharge juste
+// après une modification. La copie est écrite quand l'appli passe en
+// arrière-plan ou se ferme (et au plus une fois par seconde pendant la
+// saisie), puis effacée une fois l'enregistrement IndexedDB confirmé.
+const PREFIXE_SECOURS = 'abse-plan-metre:secours:';
+const INTERVALLE_SECOURS = 1000;
+let dernierSecours = 0;
+
+function ecrireSecours(projet: Projet): void {
+  try {
+    localStorage.setItem(PREFIXE_SECOURS + projet.id, JSON.stringify(projet));
+  } catch {
+    // Pas de stockage local (navigation privée, quota) : on s'en passe.
+  }
+}
+
+function effacerSecours(id: ID): void {
+  try {
+    localStorage.removeItem(PREFIXE_SECOURS + id);
+  } catch {
+    // idem
+  }
+}
+
+/** Copies de secours présentes (chantiers dont la dernière écriture n'a peut-être pas abouti). */
+export function lireSecours(): Projet[] {
+  const res: Projet[] = [];
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const cle = localStorage.key(i);
+      if (!cle?.startsWith(PREFIXE_SECOURS)) continue;
+      try {
+        const p = JSON.parse(localStorage.getItem(cle) ?? '') as Projet;
+        if (p && typeof p.id === 'string' && Array.isArray(p.niveaux)) res.push(p);
+      } catch {
+        // copie illisible : ignorée
+      }
+    }
+  } catch {
+    // pas de stockage local
+  }
+  return res;
+}
+
+/** Écrit tout de suite la copie de secours de la modification en attente (appel synchrone). */
+export function sauverEnSecours(): void {
+  if (aEnregistrer) ecrireSecours(aEnregistrer);
+}
+
 export function niveauCourant(etat: Pick<EtatApp, 'projet' | 'niveauId'>): Niveau | null {
   const p = etat.projet;
   if (!p) return null;
@@ -111,6 +161,11 @@ export function selectionValide(sel: Selection | null, plan: Plan | null, photos
 export const useEtat = create<EtatApp>()((set, get) => {
   function planifierEnregistrement(projet: Projet) {
     aEnregistrer = projet;
+    const maintenant = Date.now();
+    if (maintenant - dernierSecours >= INTERVALLE_SECOURS) {
+      dernierSecours = maintenant;
+      ecrireSecours(projet);
+    }
     set({ enregistrement: 'en-attente' });
     if (minuteur) clearTimeout(minuteur);
     minuteur = setTimeout(() => void get().enregistrerMaintenant(), DELAI_ENREGISTREMENT);
@@ -142,6 +197,26 @@ export const useEtat = create<EtatApp>()((set, get) => {
 
     async initialiser() {
       const projets = await persistance.listerProjets();
+      // Reprise des modifications dont l'écriture n'avait pas abouti.
+      for (const secours of lireSecours()) {
+        const i = projets.findIndex((p) => p.id === secours.id);
+        // Même date possible (deux modifications dans la même milliseconde) : on compare aussi le contenu.
+        const plusRecent =
+          i >= 0 &&
+          (secours.modifieLe > projets[i].modifieLe ||
+            (secours.modifieLe === projets[i].modifieLe && JSON.stringify(secours) !== JSON.stringify(projets[i])));
+        if (plusRecent) {
+          try {
+            await persistance.enregistrerProjet(secours);
+            projets[i] = secours;
+          } catch (e) {
+            console.error('Reprise de la copie de secours impossible', e);
+            continue;
+          }
+        }
+        effacerSecours(secours.id);
+      }
+      projets.sort((a, b) => b.modifieLe.localeCompare(a.modifieLe));
       set({ projets, pret: true });
       void persistance.demanderStockagePersistant();
     },
@@ -187,6 +262,7 @@ export const useEtat = create<EtatApp>()((set, get) => {
         if (minuteur) clearTimeout(minuteur);
       }
       await persistance.supprimerProjet(id);
+      effacerSecours(id);
       const extra = get().projet?.id === id ? { projet: null, photos: [], passe: [], futur: [], selection: null } : {};
       set({ projets: get().projets.filter((p) => p.id !== id), ...extra });
     },
@@ -291,6 +367,7 @@ export const useEtat = create<EtatApp>()((set, get) => {
       if (!projet) return;
       try {
         await persistance.enregistrerProjet(projet);
+        if ((aEnregistrer as Projet | null)?.id !== projet.id) effacerSecours(projet.id);
         if (!aEnregistrer) set({ enregistrement: 'enregistre' });
       } catch (e) {
         console.error('Enregistrement impossible', e);
@@ -304,9 +381,14 @@ export const useEtat = create<EtatApp>()((set, get) => {
 /** Enregistre dès que l'appli passe en arrière-plan (Android peut la fermer ensuite). */
 export function brancherEnregistrementAutomatique(): () => void {
   const flush = () => {
-    if (document.visibilityState === 'hidden') void useEtat.getState().enregistrerMaintenant();
+    if (document.visibilityState !== 'hidden') return;
+    sauverEnSecours();
+    void useEtat.getState().enregistrerMaintenant();
   };
-  const avantDeQuitter = () => void useEtat.getState().enregistrerMaintenant();
+  const avantDeQuitter = () => {
+    sauverEnSecours();
+    void useEtat.getState().enregistrerMaintenant();
+  };
   document.addEventListener('visibilitychange', flush);
   window.addEventListener('pagehide', avantDeQuitter);
   return () => {
