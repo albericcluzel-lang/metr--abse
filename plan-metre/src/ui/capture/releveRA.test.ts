@@ -340,6 +340,20 @@ describe('outils de la colle WebXR', () => {
     expect(viseeSol([], null, rayon)).toBeNull();
   });
 
+  it('visée au sol : une surface horizontale hors du niveau des angles posés est ignorée', () => {
+    const sol = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const rayon = { origine: p(0, 0, SOL + 1.4), direction: { x: 3, y: -1.35, z: 0 } };
+    // Dessus d'une pile de plaques à 80 cm : ignoré au profit du sol touché plus loin.
+    const pile = { position: p(2, 0, SOL + 0.8), matrice: sol };
+    const derriere = { position: p(3, 0), matrice: sol };
+    expect(viseeSol([pile, derriere], SOL, rayon, SOL)?.point).toEqual(p(3, 0));
+    expect(viseeSol([pile], SOL, rayon, SOL)?.estime).toBe(true);
+    // Sol inégal de quelques centimètres : accepté.
+    expect(viseeSol([{ position: p(2, 0, SOL + 0.05), matrice: sol }], SOL, rayon, SOL)?.estime).toBe(false);
+    // Sans angle posé, aucune référence : la surface est acceptée.
+    expect(viseeSol([pile, derriere], SOL, rayon, null)?.point).toEqual(pile.position);
+  });
+
   it('pose un segment au sol entre deux angles', () => {
     const s = poseSegment(p(0, 0), p(0, 2));
     expect(s.longueur).toBe(2);
