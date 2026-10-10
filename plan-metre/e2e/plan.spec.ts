@@ -67,6 +67,28 @@ function sommets(page: Page, i: number): Promise<number[][]> {
   );
 }
 
+/** Touche un endroit vide du plan : ni pièce ni mur à moins de 24 px, ni commande par-dessus. */
+async function toucherLeVide(page: Page) {
+  const boite = (await page.locator('svg.plan2d-svg').boundingBox())!;
+  const p = await page.evaluate((b) => {
+    const vide = (x: number, y: number) => {
+      const el = document.elementFromPoint(x, y);
+      return !!el && (el.matches('svg.plan2d-svg') || !!el.closest('.plan2d-grille'));
+    };
+    for (let j = 1; j < 24; j++) {
+      for (let i = 1; i < 12; i++) {
+        const x = b.x + (b.width * i) / 12;
+        const y = b.y + (b.height * j) / 24;
+        if ([[0, 0], [24, 0], [-24, 0], [0, 24], [0, -24]].every(([dx, dy]) => vide(x + dx, y + dy))) return { x, y };
+      }
+    }
+    return null;
+  }, boite);
+  if (!p) throw new Error('Aucun endroit vide sur le plan');
+  if (tactile()) await page.touchscreen.tap(p.x, p.y);
+  else await page.mouse.click(p.x, p.y);
+}
+
 async function attendreEnregistrement(page: Page) {
   await page.waitForFunction(() => (window as any).__etat.getState().enregistrement === 'enregistre');
 }
@@ -187,10 +209,8 @@ test('outils ouverture et équipement, glisser un sommet, zoom', async ({ page }
   await expect.poll(xCellier).toBe(240);
 
   // Zoom : pincer à deux doigts (téléphone) ou molette (PC), puis « Ajuster la vue ».
-  // Toucher le vide (en haut, au milieu de l'écran) désélectionne et referme le panneau.
-  const boite = (await page.locator('svg.plan2d-svg').boundingBox())!;
-  if (tactile()) await page.touchscreen.tap(boite.x + boite.width / 2, boite.y + 40);
-  else await page.mouse.click(boite.x + boite.width / 2, boite.y + 40);
+  // Toucher le vide désélectionne et referme le panneau.
+  await toucherLeVide(page);
   await expect(page.locator('.plan2d-proprietes')).toHaveCount(0);
   const avant = (await lireVue(page)).echelle;
   const centre = await versEcran(page, { x: 0, y: -60 });
