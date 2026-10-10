@@ -61,6 +61,10 @@ export const HAUTEUR_SAISIE_MIN_CM = 50;
 export const HAUTEUR_SAISIE_MAX_CM = 1000;
 /** Portée maximale de la visée calculée sur le plan du sol (m). */
 export const PORTEE_MAX_M = 15;
+/** Écart d'altitude (m) toléré entre un point visé et le sol (sol inégal, imprécision du suivi). */
+export const TOLERANCE_SOL_M = 0.08;
+/** En deçà de cette hauteur (m) au-dessus du sol, un mur touché est visé à son pied. */
+export const HAUTEUR_PIED_MUR_M = 0.5;
 
 export function etatInitialRA(): EtatRA {
   return { etape: 'angles', angles: [], hauteur: null, hauteurMesuree: false, zones: [], message: null, prochainId: 1 };
@@ -292,6 +296,55 @@ export function intersectionRayonSol(origine: Point3, direction: Point3, ySol: n
  */
 export function estSurfaceSol(matrice: ArrayLike<number>): boolean {
   return matrice[5] > 0.85;
+}
+
+/** La surface touchée est-elle verticale (un mur) ? */
+export function estSurfaceVerticale(matrice: ArrayLike<number>): boolean {
+  return Math.abs(matrice[5]) < 0.3;
+}
+
+/** Résultat de visée (hit-test) : position et pose de la surface touchée (matrice 4 × 4 en colonnes). */
+export interface ResultatVisee {
+  position: Point3;
+  matrice: ArrayLike<number>;
+}
+
+export interface PointVise {
+  point: Point3;
+  /** Pose de la surface touchée (réticule posé à plat dessus), null pour un point calculé. */
+  matrice: ArrayLike<number> | null;
+  /** Point calculé sur le plan du sol faute de surface détectée. */
+  estime: boolean;
+}
+
+/**
+ * Point visé au sol, d'après les résultats de visée triés du plus proche au
+ * plus loin le long du rayon (ordre donné par WebXR) :
+ *  - une surface de sol est retenue ;
+ *  - un mur touché près du sol donne le point du sol à son pied ; touché plus
+ *    haut, il masque tout ce qui est derrière lui (rien n'est retenu) ;
+ *  - faute de surface, le rayon est prolongé jusqu'au plan du sol connu
+ *    (point estimé).
+ */
+export function viseeSol(
+  resultats: readonly ResultatVisee[],
+  sol: number | null,
+  rayon: { origine: Point3; direction: Point3 } | null,
+): PointVise | null {
+  for (const r of resultats) {
+    if (estSurfaceSol(r.matrice)) return { point: r.position, matrice: r.matrice, estime: false };
+    if (estSurfaceVerticale(r.matrice)) {
+      const h = sol === null ? NaN : r.position.y - sol;
+      if (sol !== null && h > -TOLERANCE_SOL_M && h < HAUTEUR_PIED_MUR_M) {
+        return { point: { x: r.position.x, y: sol, z: r.position.z }, matrice: null, estime: false };
+      }
+      return null;
+    }
+    // Surface inclinée : ignorée.
+  }
+  if (sol === null || !rayon) return null;
+  const point = intersectionRayonSol(rayon.origine, rayon.direction, sol);
+  return point ? { point, matrice: null, estime: true } : null;
 }
 
 /** Placement d'un segment 3D posé au sol entre a et b (pavé allongé selon son axe x). */

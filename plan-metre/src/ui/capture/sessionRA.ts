@@ -31,13 +31,14 @@ import {
 import {
   altitudeSol,
   distanceHorizontale,
-  estSurfaceSol,
-  intersectionRayonSol,
   poseSegment,
   SEUIL_FERMETURE_M,
+  viseeSol,
   type AngleRA,
   type EtatRA,
   type Point3,
+  type PointVise,
+  type ResultatVisee,
   type ZoneTermineeRA,
 } from './releveRA';
 
@@ -303,29 +304,35 @@ export class SessionRA {
     const vue = frame.getViewerPose(espace);
     const suivi = Boolean(vue) && !vue!.emulatedPosition;
     const modePlafond = etat?.etape === 'hauteur';
-    let point: Point3 | null = null;
-    let matrice: Float32Array | null = null;
-    let estime = false;
+    const sol = etat ? altitudeSol(etat) : null;
 
     const source = modePlafond ? (this.sourcePlafond ?? this.sourceSol) : this.sourceSol;
+    const resultats: ResultatVisee[] = [];
     for (const r of frame.getHitTestResults(source)) {
       const pose = r.getPose(espace);
       if (!pose) continue;
-      if (!modePlafond && !estSurfaceSol(pose.transform.matrix)) continue;
       const p = pose.transform.position;
-      point = { x: p.x, y: p.y, z: p.z };
-      matrice = pose.transform.matrix;
-      break;
+      resultats.push({ position: { x: p.x, y: p.y, z: p.z }, matrice: pose.transform.matrix });
     }
-    // Repli : rayon de visée prolongé jusqu'au plan du sol déjà connu.
-    const sol = etat ? altitudeSol(etat) : null;
-    if (!point && !modePlafond && vue && sol !== null) {
-      const o = vue.transform.position;
-      const q = vue.transform.orientation;
-      const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
-      point = intersectionRayonSol({ x: o.x, y: o.y, z: o.z }, { x: dir.x, y: dir.y, z: dir.z }, sol);
-      estime = point !== null;
+    let vise: PointVise | null;
+    if (modePlafond) {
+      // Jonction mur / plafond : la surface la plus proche, quelle qu'elle soit.
+      const r = resultats[0];
+      vise = r ? { point: r.position, matrice: r.matrice, estime: false } : null;
+    } else {
+      // Rayon de visée (axe −z du téléphone), prolongé jusqu'au sol faute de surface.
+      let rayon: { origine: Point3; direction: Point3 } | null = null;
+      if (vue) {
+        const o = vue.transform.position;
+        const q = vue.transform.orientation;
+        const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
+        rayon = { origine: { x: o.x, y: o.y, z: o.z }, direction: { x: dir.x, y: dir.y, z: dir.z } };
+      }
+      vise = viseeSol(resultats, sol, rayon);
     }
+    const point = vise?.point ?? null;
+    const matrice = vise?.matrice ?? null;
+    const estime = vise?.estime ?? false;
     this.pointVise = point;
 
     // Réticule.

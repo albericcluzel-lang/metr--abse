@@ -13,6 +13,7 @@ import {
   poseSegment,
   problemeFermeture,
   reduireRA,
+  viseeSol,
   type ActionRA,
   type EtatRA,
   type Point3,
@@ -293,6 +294,27 @@ describe('outils de la colle WebXR', () => {
     // Mur : normale horizontale.
     const mur = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1];
     expect(estSurfaceSol(mur)).toBe(false);
+  });
+
+  it('visée au sol : un mur touché au pied donne l’angle à son aplomb, plus haut il masque le sol', () => {
+    const sol = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const mur = [0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 1];
+    const incline = [1, 0, 0, 0, 0, 0.6, 0.8, 0, 0, -0.8, 0.6, 0, 0, 0, 0, 1];
+    const rayon = { origine: p(0, 0, SOL + 1.4), direction: { x: 3, y: -1.35, z: 0 } };
+    // Sol touché : retenu tel quel, avec sa pose.
+    expect(viseeSol([{ position: p(2, 0), matrice: sol }], SOL, rayon)).toEqual({ point: p(2, 0), matrice: sol, estime: false });
+    // Pied du mur (5 cm au-dessus du sol) : point du sol à l'aplomb, même si un sol est touché derrière.
+    const pied = { position: p(3, 0, SOL + 0.05), matrice: mur };
+    expect(viseeSol([pied, { position: p(3.11, 0), matrice: sol }], SOL, rayon)).toEqual({ point: p(3, 0), matrice: null, estime: false });
+    // Mur touché à 1 m : rien derrière lui, ni sol touché ni point estimé.
+    expect(viseeSol([{ position: p(3, 0, SOL + 1), matrice: mur }, { position: p(7, 0), matrice: sol }], SOL, rayon)).toBeNull();
+    // Sol inconnu : le pied du mur ne peut pas être calculé.
+    expect(viseeSol([pied], null, rayon)).toBeNull();
+    // Surface inclinée ignorée ; faute d'autre surface, point estimé sur le plan du sol.
+    const estime = viseeSol([{ position: p(1, 0, SOL + 0.3), matrice: incline }], SOL, rayon);
+    expect(estime?.estime).toBe(true);
+    expect(estime?.point.x).toBeCloseTo(3.111, 3);
+    expect(viseeSol([], null, rayon)).toBeNull();
   });
 
   it('pose un segment au sol entre deux angles', () => {
