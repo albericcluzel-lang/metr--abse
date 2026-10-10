@@ -276,3 +276,22 @@ test('panneau d’un équipement : la ligne Rotation tient dans la largeur du pa
   const corps = page.locator(tactile() ? '.feuille-corps' : '.plan2d-panneau-corps');
   expect(await corps.evaluate((el) => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(0);
 });
+
+test('changer de niveau revient à l’outil Sélection et propose de relever ou dessiner', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Niveaux e2e',
+    `projet.niveaux[0].actuel.pieces.push(fabrique.pieceRectangle('Séjour', 400, 300));`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  const outil = page.getByRole('button', { name: 'Ajouter un équipement' });
+  await outil.click();
+  await expect(outil).toHaveAttribute('aria-pressed', 'true');
+  await toucher(page, { x: 700, y: 150 }); // hors des pièces : rien n'est posé, l'outil reste actif
+  await expect(outil).toHaveAttribute('aria-pressed', 'true');
+  await page.getByLabel('Niveau', { exact: true }).selectOption('__ajouter__');
+  await page.getByRole('dialog', { name: 'Nouveau niveau' }).getByRole('button', { name: 'Ajouter' }).click();
+  await expect(page.getByText('Aucune pièce sur ce niveau')).toBeVisible();
+  await expect(outil).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByRole('group', { name: 'Type d’équipement' })).toHaveCount(0);
+});

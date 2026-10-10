@@ -246,12 +246,11 @@ export function EditeurPlan2D() {
     ajuster();
   }, [taille, niveau, ajuster]);
 
-  // Changement de niveau ou de variante : le tracé en cours est abandonné.
+  // Changement de niveau ou de variante : le tracé en cours est abandonné et
+  // l'outil revient à la Sélection (un niveau vide propose alors relevé et dessin).
   useEffect(() => {
-    definirTrace([]);
-    setCurseur(null);
-    setFormulaire(false);
-  }, [niveau?.id, variante, definirTrace]);
+    changerOutil('selection');
+  }, [niveau?.id, variante, changerOutil]);
 
   useEffect(() => {
     const svg = svgRef.current;
