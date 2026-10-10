@@ -7,6 +7,7 @@ import {
   decalerVersExterieur,
   decouperParConvexe,
   longueurCote,
+  perimetreDecale,
   suivant,
 } from './polygone';
 
@@ -30,6 +31,12 @@ export function epaisseurCote(piece: Piece, i: number, catalogue: Catalogue): nu
 export function contourExterieur(piece: Piece, catalogue: Catalogue): Point[] {
   const epaisseurs = piece.sommets.map((_, i) => epaisseurCote(piece, i, catalogue));
   return decalerVersExterieur(piece.sommets, epaisseurs);
+}
+
+/** Longueur du contour extérieur (cf. perimetreDecale). */
+export function perimetreExterieur(piece: Piece, catalogue: Catalogue): number {
+  const epaisseurs = piece.sommets.map((_, i) => epaisseurCote(piece, i, catalogue));
+  return perimetreDecale(piece.sommets, epaisseurs);
 }
 
 export interface SegmentOuverture {

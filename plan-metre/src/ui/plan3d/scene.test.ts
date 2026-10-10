@@ -1,6 +1,7 @@
 import { Box3, EdgesGeometry, LineSegments, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three';
 import { describe, expect, it } from 'vitest';
 import { coinsEquipement } from '../../geometrie/piece';
+import { contientPoint, distancePointSegment } from '../../geometrie/polygone';
 import { catalogueParDefaut } from '../../model/catalogue';
 import { nouvelEquipement, nouvelleOuverture, pieceRectangle } from '../../model/fabrique';
 import type { Plan } from '../../model/types';
@@ -246,5 +247,58 @@ describe('étiquettes des pièces', () => {
     expect(e.position.x).toBeCloseTo(1.02, 6);
     expect(e.position.z).toBeCloseTo(0.875, 6);
     expect(e.position.y).toBeLessThan(0.05);
+  });
+});
+
+describe('murs aux jonctions difficiles (revue)', () => {
+  /** Aire des faces 3D posées sur le contour intérieur et tournées vers la pièce (m²). */
+  function nuInterieur(p: ReturnType<typeof pieceRectangle>): number {
+    const murs = nommes(construireGroupePlan({ pieces: [p] }, catalogue), 'murs')[0] as Mesh;
+    const surContour = (v: Vector3) =>
+      p.sommets.some((a, i) => {
+        const b = p.sommets[(i + 1) % p.sommets.length];
+        return distancePointSegment({ x: v.x * 100, y: v.z * 100 }, a, b) < 1e-3;
+      });
+    return triangles(murs.geometry, 0)
+      .filter((t) => {
+        if (![t.a, t.b, t.c].every(surContour) || Math.abs(t.n.y) > 1e-6) return false;
+        // Juste devant la face (1 cm selon sa normale), on doit être dans la pièce.
+        const m = new Vector3().add(t.a).add(t.b).add(t.c).divideScalar(3);
+        return contientPoint(p.sommets, { x: m.x * 100 + t.n.x, y: m.z * 100 + t.n.z });
+      })
+      .reduce((s, t) => s + t.aire, 0);
+  }
+
+  it('demi-mur suivi d’un côté sans mur : le demi-mur existe', () => {
+    const p = pieceRectangle('Cuisine', 400, 300, { hauteur: 250 });
+    p.sommets.splice(1, 0, { x: 200, y: 0 });
+    p.sommets[1].typeMurId = null; // seconde moitié du côté haut ouverte
+    expect(nuInterieur(p)).toBeCloseTo((200 + 300 + 400 + 300) * 250 / 1e4, 6);
+  });
+
+  it('angle aigu de 28° : les trois murs existent', () => {
+    const h = 600 * Math.tan((28 * Math.PI) / 180);
+    const p = pieceRectangle('Pointe', 10, 10, { hauteur: 250 });
+    p.sommets = [
+      { x: 0, y: 0 },
+      { x: 600, y: 0 },
+      { x: 0, y: h },
+    ];
+    expect(nuInterieur(p)).toBeCloseTo((600 + h + Math.hypot(600, h)) * 250 / 1e4, 6);
+  });
+
+  it('refend de 15 cm : le bout du refend existe', () => {
+    const p = pieceRectangle('Séjour', 500, 400, { hauteur: 250 });
+    p.sommets = [
+      { x: 0, y: 0 },
+      { x: 240, y: 0 },
+      { x: 240, y: 150 },
+      { x: 255, y: 150 },
+      { x: 255, y: 0 },
+      { x: 500, y: 0 },
+      { x: 500, y: 400 },
+      { x: 0, y: 400 },
+    ];
+    expect(nuInterieur(p)).toBeCloseTo(2100 * 250 / 1e4, 6);
   });
 });

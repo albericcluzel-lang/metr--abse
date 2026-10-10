@@ -32,7 +32,7 @@ import {
   type Object3D,
 } from 'three';
 import { hauteurEffective, segmentOuverture, trouverTypeMur, typeMurIdCote } from '../../geometrie/piece';
-import { aire, aireSignee, decalerVersExterieur, distance, normaleExterieure, pointEtiquette, suivant } from '../../geometrie/polygone';
+import { aire, aireSignee, distance, facesExterieures, normaleExterieure, pointEtiquette, suivant } from '../../geometrie/polygone';
 import { formaterValeur, percementsPropres, percementsVoisins } from '../../metre/calcul';
 import type { Catalogue, Ouverture, Piece, Plan, Point } from '../../model/types';
 import { construireVolumeEquipement } from './equipements';
@@ -215,8 +215,17 @@ function construireMurs(piece: Piece, plan: Plan, catalogue: Catalogue, faces: T
   if (H <= 0) return;
   const epaisseurs = pts.map((_, i) => epaisseurMur3D(piece, i, catalogue));
   // Même calcul que contourExterieur(), avec une épaisseur de repli pour un type de mur inconnu.
-  const ext = decalerVersExterieur(pts, epaisseurs);
+  const ext = facesExterieures(pts, epaisseurs);
   const percements = [...percementsPropres(piece), ...percementsVoisins(piece, plan, catalogue)];
+  // Jonction en retour d'about ou en biseau au sommet k (pas d'onglet commun).
+  const sansOnglet = (k: number) => distance(ext[(k - 1 + n) % n].fin, ext[k].debut) > 0.01;
+  // Retour d'about entre deux côtés alignés : coin sans aire.
+  const coinPlat = (k: number) => {
+    const s = pts[k];
+    const a = ext[(k - 1 + n) % n].fin;
+    const b = ext[k].debut;
+    return Math.abs((a.x - s.x) * (b.y - s.y) - (a.y - s.y) * (b.x - s.x)) < 1e-3;
+  };
 
   for (let i = 0; i < n; i++) {
     if (epaisseurs[i] <= 0) continue;
@@ -226,23 +235,34 @@ function construireMurs(piece: Piece, plan: Plan, catalogue: Catalogue, faces: T
     if (L < 0.5) continue;
     const u = { x: (P1.x - P.x) / L, y: (P1.y - P.y) / L };
     const nrm = normaleExterieure(pts, i);
-    const Q = ext[i];
-    const Q1 = ext[(i + 1) % n];
     const local = (X: Point): PointMur => ({
       s: (X.x - P.x) * u.x + (X.y - P.y) * u.y,
       t: (X.x - P.x) * nrm.x + (X.y - P.y) * nrm.y,
     });
-    const lq = local(Q);
-    const lq1 = local(Q1);
-    if (lq1.s - lq.s < 0.5 || lq.t <= 0.01 || lq1.t <= 0.01) continue; // côté dégénéré
+    let Q = ext[i].debut;
+    let Q1 = ext[i].fin;
+    let lq = local(Q);
+    let lq1 = local(Q1);
+    if (lq1.s - lq.s < 0.5 || lq.t <= 0.01 || lq1.t <= 0.01) {
+      // Onglets impossibles (côté plus court que les murs qui l'encadrent) :
+      // le mur garde son nu intérieur, avec des bouts d'équerre.
+      Q = { x: P.x + nrm.x * epaisseurs[i], y: P.y + nrm.y * epaisseurs[i] };
+      Q1 = { x: P1.x + nrm.x * epaisseurs[i], y: P1.y + nrm.y * epaisseurs[i] };
+      lq = local(Q);
+      lq1 = local(Q1);
+    }
     const trapeze = trapezeMur(L, lq, lq1);
     const origines = [P, P1, Q1, Q];
     const monde = (p: PointMur): Point =>
       p.origine !== undefined ? origines[p.origine] : { x: P.x + u.x * p.s + nrm.x * p.t, y: P.y + u.y * p.s + nrm.y * p.t };
 
     const g = grilleMur(lq.s, lq1.s, L, H, percements.filter((p) => p.cote === i));
-    const debutLibre = epaisseurs[(i - 1 + n) % n] <= 0;
-    const finLibre = epaisseurs[(i + 1) % n] <= 0;
+    // Bout de mur visible : pas de mur voisin, ou voisin aligné plus mince (retour d'about).
+    const debutLibre =
+      epaisseurs[(i - 1 + n) % n] <= 0 || (sansOnglet(i) && coinPlat(i) && epaisseurs[(i - 1 + n) % n] < epaisseurs[i]);
+    const finLibre =
+      epaisseurs[(i + 1) % n] <= 0 ||
+      (sansOnglet((i + 1) % n) && coinPlat((i + 1) % n) && epaisseurs[(i + 1) % n] < epaisseurs[i]);
     const nc = g.colonnes.length - 1;
     const nb = g.bandes.length - 1;
 
@@ -278,6 +298,22 @@ function construireMurs(piece: Piece, plan: Plan, catalogue: Catalogue, faces: T
         if (b > 0 && !g.plein[c][b - 1]) faces.polygone(empriseMonde.map((p) => versScene(p, z0)), VERS_LE_BAS);
       }
     }
+  }
+
+  // Coins en biseau (angle très aigu entre deux murs) : triangle plein entre les deux bouts.
+  for (let k = 0; k < n; k++) {
+    const avant = (k - 1 + n) % n;
+    if (epaisseurs[avant] <= 0 || epaisseurs[k] <= 0 || !sansOnglet(k) || coinPlat(k)) continue;
+    const sommet = pts[k];
+    const a = ext[avant].fin;
+    const b = ext[k].debut;
+    const coin = [sommet, a, b];
+    dessus.polygone(coin.map((p) => versScene(p, H)), VERS_LE_HAUT);
+    const milieu = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const versDehors = { x: milieu.x - sommet.x, y: milieu.y - sommet.y };
+    const normale = normaleBord(a, b, 1);
+    const sens = normale.x * versDehors.x + normale.z * versDehors.y >= 0 ? 1 : -1;
+    faces.paroi(a, b, 0, H, normaleBord(a, b, sens));
   }
 }
 

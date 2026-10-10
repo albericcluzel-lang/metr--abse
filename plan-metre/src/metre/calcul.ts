@@ -33,9 +33,9 @@ import type {
 } from '../model/types';
 import {
   coinsEquipement,
-  contourExterieur,
   epaisseurCote,
   hauteurEffective,
+  perimetreExterieur,
   segmentOuverture,
   trouverTypeMur,
   typeMurIdCote,
@@ -214,7 +214,7 @@ export function metrePiece(
   d.surfaceSol = sol;
   d.volume = sol * piece.hauteur;
   d.perimetreInterieur = perimetre(piece.sommets);
-  d.perimetreExterieur = perimetre(contourExterieur(piece, catalogue));
+  d.perimetreExterieur = perimetreExterieur(piece, catalogue);
   d.plafondAPeindre = piece.plafondAPeindre ? sol : 0;
 
   const propres = percementsPropres(piece);

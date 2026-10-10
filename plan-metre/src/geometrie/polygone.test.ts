@@ -7,8 +7,10 @@ import {
   decalerVersExterieur,
   decouperParConvexe,
   distance,
+  facesExterieures,
   orthogonaliser,
   perimetre,
+  perimetreDecale,
   pointEtiquette,
   simplifier,
   tourner,
@@ -112,5 +114,67 @@ describe('polygone', () => {
       { x: 0, y: 100 },
     ];
     expect(simplifier(pts)).toHaveLength(4);
+  });
+});
+
+describe('contour extérieur : retours d’about et biseaux', () => {
+  it('demi-mur suivi d’un côté sans mur : retour d’about au lieu d’une diagonale', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 400, y: 0 },
+      { x: 400, y: 300 },
+      { x: 0, y: 300 },
+    ];
+    const ep = [9.8, 0, 9.8, 9.8, 9.8];
+    const f = facesExterieures(pts, ep);
+    expect(f[0].fin).toEqual({ x: 200, y: -9.8 });
+    expect(f[1].debut.y).toBeCloseTo(0, 9);
+    expect(perimetreDecale(pts, ep)).toBeCloseTo(209.8 + 9.8 + 209.8 + 309.8 + 419.6 + 319.6, 6);
+    expect(decalerVersExterieur(pts, ep)).toHaveLength(6);
+  });
+
+  it('épaisseurs différentes sur deux côtés alignés : retour égal à la différence', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 200, y: 0 },
+      { x: 400, y: 0 },
+      { x: 400, y: 300 },
+      { x: 0, y: 300 },
+    ];
+    const f = facesExterieures(pts, [20, 9.8, 9.8, 9.8, 9.8]);
+    expect(distance(f[0].fin, f[1].debut)).toBeCloseTo(10.2, 9);
+  });
+
+  it('angle aigu de 25° : onglet complet, pas de plafonnement à 4 épaisseurs', () => {
+    const h = 600 * Math.tan((25 * Math.PI) / 180);
+    const tri = [
+      { x: 0, y: 0 },
+      { x: 600, y: 0 },
+      { x: 0, y: h },
+    ];
+    const ep = [9.8, 9.8, 9.8];
+    const f = facesExterieures(tri, ep);
+    // Les trois jonctions sont des onglets.
+    for (let i = 0; i < 3; i++) expect(distance(f[i].fin, f[(i + 1) % 3].debut)).toBeLessThan(1e-9);
+    expect(perimetreDecale(tri, ep)).toBeCloseTo(perimetre(decalerVersExterieur(tri, ep)), 6);
+  });
+
+  it('bout de refend plus étroit que deux épaisseurs : compté pour zéro', () => {
+    const pts = [
+      { x: 0, y: 0 },
+      { x: 240, y: 0 },
+      { x: 240, y: 150 },
+      { x: 255, y: 150 },
+      { x: 255, y: 0 },
+      { x: 500, y: 0 },
+      { x: 500, y: 400 },
+      { x: 0, y: 400 },
+    ];
+    const ep = pts.map(() => 9.8);
+    const f = facesExterieures(pts, ep);
+    const u = { x: 1, y: 0 };
+    expect((f[2].fin.x - f[2].debut.x) * u.x).toBeLessThan(0); // face du bout retournée
+    expect(perimetreDecale(pts, ep)).toBeLessThan(perimetre(decalerVersExterieur(pts, ep)));
   });
 });

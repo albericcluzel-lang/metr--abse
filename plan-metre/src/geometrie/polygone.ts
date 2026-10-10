@@ -161,40 +161,94 @@ export function normaleExterieure(points: readonly Point[], i: number): Point {
   return { x: (dy / l) * sens, y: (-dx / l) * sens };
 }
 
+/** Distance maximale d'un onglet au sommet, en épaisseurs de mur (au-delà : biseau). */
+const ONGLET_MAX = 10;
+
+/** Face extérieure d'un côté : le côté décalé vers l'extérieur, borné aux jonctions. */
+export interface FaceExterieure {
+  debut: Point;
+  fin: Point;
+}
+
 /**
- * Décale le contour vers l'extérieur, chaque côté i de `distances[i]` (cm).
- * Jonctions en onglet ; les angles très aigus sont plafonnés pour éviter les
- * pointes démesurées.
+ * Faces extérieures des côtés, chaque côté i étant décalé de `distances[i]`
+ * (cm) vers l'extérieur. Aux sommets, les faces voisines se rejoignent en
+ * onglet ; quand c'est impossible ou démesuré (côtés alignés d'épaisseurs
+ * différentes, demi-mur suivi d'un côté sans mur, angle très aigu), chaque
+ * face s'arrête au droit du sommet : la jonction devient un retour d'about
+ * ou un biseau, et `fin` du côté précédent diffère de `debut` du suivant.
  */
-export function decalerVersExterieur(points: readonly Point[], distances: readonly number[]): Point[] {
+export function facesExterieures(points: readonly Point[], distances: readonly number[]): FaceExterieure[] {
   const n = points.length;
-  if (n < 3) return points.map((p) => ({ ...p }));
   const lignes = points.map((a, i) => {
     const b = suivant(points, i);
     const nrm = normaleExterieure(points, i);
     const d = distances[i] ?? 0;
-    return {
-      p: { x: a.x + nrm.x * d, y: a.y + nrm.y * d },
-      dir: { x: b.x - a.x, y: b.y - a.y },
-      d,
-      nrm,
-    };
+    return { p: { x: a.x + nrm.x * d, y: a.y + nrm.y * d }, dir: { x: b.x - a.x, y: b.y - a.y }, d, nrm };
   });
-  const resultat: Point[] = [];
-  for (let i = 0; i < n; i++) {
-    const avant = lignes[(i - 1 + n) % n];
-    const apres = lignes[i];
-    const sommet = points[i];
+  const debuts: Point[] = [];
+  const fins: Point[] = [];
+  for (let k = 0; k < n; k++) {
+    const a = (k - 1 + n) % n;
+    const avant = lignes[a];
+    const apres = lignes[k];
+    const sommet = points[k];
     const inter = intersectionDroites(avant.p, avant.dir, apres.p, apres.dir);
     const dmax = Math.max(avant.d, apres.d);
-    if (inter && distance(inter, sommet) <= Math.max(dmax * 4, EPS)) {
-      resultat.push(inter);
+    if (inter && distance(inter, sommet) <= Math.max(dmax * ONGLET_MAX, EPS)) {
+      fins[a] = inter;
+      debuts[k] = inter;
     } else {
-      // Côtés alignés (ou angle trop aigu) : on décale selon la normale du côté suivant.
-      resultat.push({ x: sommet.x + apres.nrm.x * apres.d, y: sommet.y + apres.nrm.y * apres.d });
+      fins[a] = { x: sommet.x + avant.nrm.x * avant.d, y: sommet.y + avant.nrm.y * avant.d };
+      debuts[k] = { x: sommet.x + apres.nrm.x * apres.d, y: sommet.y + apres.nrm.y * apres.d };
     }
   }
-  return resultat;
+  return points.map((_, i) => ({ debut: debuts[i], fin: fins[i] }));
+}
+
+/**
+ * Contour extérieur : le contour décalé vers l'extérieur, chaque côté i de
+ * `distances[i]` (cm). Un sommet du contour intérieur donne un point (onglet)
+ * ou deux (retour d'about, biseau) : ne pas apparier les indices avec le
+ * contour intérieur, utiliser `facesExterieures` pour cela.
+ */
+export function decalerVersExterieur(points: readonly Point[], distances: readonly number[]): Point[] {
+  if (points.length < 3) return points.map((p) => ({ ...p }));
+  const res: Point[] = [];
+  const ajouter = (p: Point) => {
+    const dernier = res[res.length - 1];
+    if (!dernier || distance(dernier, p) > 1e-6) res.push(p);
+  };
+  for (const f of facesExterieures(points, distances)) {
+    ajouter(f.debut);
+    ajouter(f.fin);
+  }
+  if (res.length > 1 && distance(res[0], res[res.length - 1]) <= 1e-6) res.pop();
+  return res;
+}
+
+/**
+ * Longueur du contour extérieur. Une face qui se retourne (côté plus court
+ * que l'épaisseur des murs qui l'encadrent, ex. bout d'un refend étroit)
+ * compte pour zéro au lieu de s'ajouter.
+ */
+export function perimetreDecale(points: readonly Point[], distances: readonly number[]): number {
+  if (points.length < 3) return perimetre(points);
+  const faces = facesExterieures(points, distances);
+  let total = 0;
+  for (let i = 0; i < points.length; i++) {
+    const a = points[i];
+    const b = suivant(points, i);
+    const l = distance(a, b);
+    if (l > EPS) {
+      const ux = (b.x - a.x) / l;
+      const uy = (b.y - a.y) / l;
+      total += Math.max(0, (faces[i].fin.x - faces[i].debut.x) * ux + (faces[i].fin.y - faces[i].debut.y) * uy);
+    }
+    // Retour d'about ou biseau entre la face i et la suivante.
+    total += distance(faces[i].fin, faces[(i + 1) % points.length].debut);
+  }
+  return total;
 }
 
 export function tourner(p: Point, angleRad: number, centre: Point = { x: 0, y: 0 }): Point {
