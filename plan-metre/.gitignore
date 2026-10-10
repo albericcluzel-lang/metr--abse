@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.tsbuildinfo
+
+# Le verrou des dépendances est nécessaire à « npm ci » (ignoré à la racine du dépôt).
+!package-lock.json
