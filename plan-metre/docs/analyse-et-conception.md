@@ -30,7 +30,9 @@ avec un iPhone Pro, puis plan et métré générés automatiquement.
 | Circonférences · Plinthes | 7,58 m | intérieure − largeur des ouvertures au sol |
 | Revêtements de sol · Carrelage beige vintage 25×25 | 2,36 m² | sol − emprise baignoire et meuble vasque (≈ 1,21 m²) |
 
-Ces valeurs sont reproduites à l'identique par les tests (`src/metre/calcul.test.ts`).
+Ces valeurs sont reproduites par les tests (`src/metre/calcul.test.ts`), à une exception près : le périmètre
+extérieur donne 8,36 m (7,58 + 8 × 0,098) contre 8,37 m affiché par Visuary, écart dû à une épaisseur ou à un arrondi
+propre à l'appli de référence.
 
 ## 2. Adaptation à Android
 

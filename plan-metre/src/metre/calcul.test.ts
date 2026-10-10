@@ -217,3 +217,79 @@ describe('formatage', () => {
     expect(formaterEcart(-0.4, 'm').replace(/ | /g, ' ')).toBe('−0,40 m');
   });
 });
+
+describe('corrections issues de la revue', () => {
+  it('arrondit à zéro les résidus de calcul (pas de « −0,00 » ni de NaN)', () => {
+    expect(arrondir(1.7763568394002505e-15)).toBe(0);
+    expect(arrondir(-1e-7)).toBe(0);
+    expect(formaterValeur(1e-7, 'm²').replace(/ | /g, ' ')).toBe('0,00 m²');
+    expect(formaterEcart(-1.7763568394002505e-15, 'm²')).toBe('=');
+    expect(arrondir(0.005)).toBe(0.01);
+    expect(arrondir(123456.785)).toBe(123456.79);
+  });
+
+  it('détecte la porte voisine quand le mur d’en face est plus épais', () => {
+    const sejour = pieceRectangle('Séjour', 400, 300);
+    sejour.sommets[1].typeMurId = 'mur-parpaing-20'; // côté droit
+    const chambre = pieceRectangle('Chambre', 300, 300, { origine: { x: 420, y: 0 } });
+    chambre.ouvertures.push(nouvelleOuverture('porte', 3, 100)); // côté gauche de la chambre
+    const plan: Plan = { pieces: [sejour, chambre] };
+    const l = lignesMetre(metrePiece(sejour, catalogue, parametres, plan), catalogue);
+    expect(valeur(l, 'peinture:mur-parpaing-20')).toBe(arrondir(7.5 - 0.83 * 2.04));
+    expect(valeur(l, 'perimetres:plinthes')).toBe(arrondir(14 - 0.83));
+  });
+
+  it('mesure l’écart des faces au droit de l’ouverture (côtés presque parallèles)', () => {
+    const chambre = pieceRectangle('Chambre', 300, 600);
+    chambre.ouvertures.push(nouvelleOuverture('porte', 1, 40)); // en haut du côté droit
+    // Couloir dont le côté gauche fait 2° avec la cloison : collé en bas, ~28 cm d'écart au droit de la porte.
+    const dx = Math.tan((2 * Math.PI) / 180) * 600;
+    const couloir = pieceRectangle('Couloir', 120, 600, { origine: { x: 309.8, y: 0 } });
+    couloir.sommets[0].x = 309.8 + dx; // haut gauche décalé vers la droite
+    for (const sens of [false, true]) {
+      const c = structuredClone(couloir);
+      if (sens) c.sommets.reverse();
+      const plan: Plan = { pieces: [chambre, c] };
+      const voisins = metrePiece(c, catalogue, parametres, plan);
+      const seul = metrePiece(c, catalogue, parametres);
+      expect(voisins.mursAPeindre['cloison-98']).toBeCloseTo(seul.mursAPeindre['cloison-98'], 6);
+    }
+  });
+
+  it('applique le seuil à l’ouverture entière, même à cheval sur deux côtés alignés', () => {
+    const chambre = pieceRectangle('Chambre', 300, 300);
+    chambre.ouvertures.push(nouvelleOuverture('porte', 1, 110));
+    const couloir = pieceRectangle('Couloir', 120, 300, { origine: { x: 309.8, y: 0 } });
+    // Côté gauche du couloir coupé en y = 150 : (309.8,300) → (309.8,150) → (309.8,0).
+    couloir.sommets.push({ x: 309.8, y: 150 });
+    couloir.sommets = [couloir.sommets[0], couloir.sommets[1], couloir.sommets[2], couloir.sommets[3], { x: 309.8, y: 150 }];
+    const plan: Plan = { pieces: [chambre, couloir] };
+    const seuil = { deduireOuvertures: true, seuilDeductionOuverture: 1 };
+    const l = lignesMetre(metrePiece(couloir, catalogue, seuil, plan), catalogue);
+    expect(valeur(l, 'peinture:cloison-98')).toBe(arrondir(8.4 * 2.5 - 0.83 * 2.04));
+  });
+
+  it('compte une seule fois dans les menuiseries une porte saisie dans les deux pièces', () => {
+    const projet = nouveauProjet({ nom: 'Test' });
+    const chambre = pieceRectangle('Chambre', 300, 300);
+    const couloir = pieceRectangle('Couloir', 120, 300, { origine: { x: 309.8, y: 0 } });
+    chambre.ouvertures.push(nouvelleOuverture('porte', 1, 100));
+    couloir.ouvertures.push(nouvelleOuverture('porte', 3, 117));
+    projet.niveaux[0].actuel = { pieces: [chambre, couloir] };
+    const m = metreProjet(projet, 'actuel');
+    expect(m.global.ouvertures['porte|83|204']).toBe(1);
+    // Chaque pièce garde sa déduction.
+    for (const p of m.parPiece) {
+      expect(p.detail.plinthes).toBeCloseTo(p.detail.perimetreInterieur - 83, 6);
+    }
+  });
+
+  it('ne déduit pas deux fois la partie commune de deux équipements superposés', () => {
+    const p = pieceRectangle('Cellier', 200, 150);
+    p.revetementSolId = 'carrelage';
+    p.equipements.push(nouvelEquipement('placard', { x: 100, y: 75 })); // 100 × 60
+    p.equipements.push(nouvelEquipement('ballon-ecs', { x: 100, y: 75 })); // 60 × 60, dans le placard
+    const l = lignesMetre(metrePiece(p, catalogue, parametres), catalogue);
+    expect(valeur(l, 'sols:carrelage')).toBe(arrondir((30000 - 6000) / 1e4));
+  });
+});

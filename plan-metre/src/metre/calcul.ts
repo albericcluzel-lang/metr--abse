@@ -32,15 +32,22 @@ import type {
   Variante,
 } from '../model/types';
 import {
+  coinsEquipement,
   contourExterieur,
-  empriseDansPiece,
   epaisseurCote,
   hauteurEffective,
   segmentOuverture,
   trouverTypeMur,
   typeMurIdCote,
 } from '../geometrie/piece';
-import { aire, longueurCote, normaleExterieure, perimetre, suivant } from '../geometrie/polygone';
+import {
+  aire,
+  decouperParConvexe,
+  longueurCote,
+  normaleExterieure,
+  perimetre,
+  suivant,
+} from '../geometrie/polygone';
 
 export interface DetailMetre {
   nombrePieces: number;
@@ -89,6 +96,14 @@ export interface PercementCote {
   /** Hauteur dans le mur de cette pièce (cm). */
   hauteur: number;
   allege: number;
+  /**
+   * Surface de l'ouverture d'origine (cm²), pour le seuil de déduction :
+   * une ouverture à cheval sur deux côtés alignés reste une seule ouverture.
+   */
+  surface: number;
+  /** Pièce qui porte l'ouverture et identifiant de l'ouverture. */
+  pieceId: ID;
+  ouvertureId: ID;
 }
 
 const COS_PARALLELE = Math.cos((3 * Math.PI) / 180);
@@ -107,8 +122,10 @@ export function percementsVoisins(piece: Piece, plan: Plan, catalogue: Catalogue
       if (!seg || seg.fin - seg.debut <= 0) continue;
       if (typeMurIdCote(autre, o.cote) === null) continue;
       const nA = normaleExterieure(autre.sommets, o.cote);
-      const epaisseur = epaisseurCote(autre, o.cote, catalogue);
+      const epaisseurA = epaisseurCote(autre, o.cote, catalogue);
       const ua = { x: (seg.b.x - seg.a.x) / (seg.fin - seg.debut), y: (seg.b.y - seg.a.y) / (seg.fin - seg.debut) };
+      const milieu = { x: (seg.a.x + seg.b.x) / 2, y: (seg.a.y + seg.b.y) / 2 };
+      const surface = (seg.fin - seg.debut) * hauteurEffective(autre, o);
       for (let j = 0; j < piece.sommets.length; j++) {
         if (typeMurIdCote(piece, j) === null) continue;
         const p = piece.sommets[j];
@@ -120,9 +137,14 @@ export function percementsVoisins(piece: Piece, plan: Plan, catalogue: Catalogue
         const nB = normaleExterieure(piece.sommets, j);
         // Les deux faces du mur se regardent : normales opposées.
         if (nA.x * nB.x + nA.y * nB.y > -COS_PARALLELE) continue;
-        // Écart entre la face de la pièce voisine et ce côté, mesuré selon nA.
-        const ecart = (p.x - seg.a.x) * nA.x + (p.y - seg.a.y) * nA.y;
-        if (ecart < -2 || ecart > Math.max(epaisseur, 1) + 5) continue;
+        // Écart entre la face de la pièce voisine et ce côté, mesuré selon nA au
+        // droit du milieu de l'ouverture (juste aussi pour des côtés presque parallèles).
+        const det = ub.x * nA.y - ub.y * nA.x;
+        if (Math.abs(det) < 1e-9) continue;
+        const ecart = (ub.x * (p.y - milieu.y) - ub.y * (p.x - milieu.x)) / det;
+        // Le mur fait l'épaisseur de la plus épaisse des deux faces (cf. aimantation mur à mur).
+        const epaisseur = Math.max(epaisseurA, epaisseurCote(piece, j, catalogue), 1);
+        if (ecart < -2 || ecart > epaisseur + 5) continue;
         const sa = (seg.a.x - p.x) * ub.x + (seg.a.y - p.y) * ub.y;
         const sb = (seg.b.x - p.x) * ub.x + (seg.b.y - p.y) * ub.y;
         const debut = Math.max(0, Math.min(sa, sb));
@@ -130,7 +152,16 @@ export function percementsVoisins(piece: Piece, plan: Plan, catalogue: Catalogue
         if (fin - debut <= 1) continue;
         const allege = Math.max(0, o.allege);
         const haut = Math.min(allege + o.hauteur, piece.hauteur);
-        resultat.push({ cote: j, debut, largeur: fin - debut, hauteur: Math.max(0, haut - allege), allege });
+        resultat.push({
+          cote: j,
+          debut,
+          largeur: fin - debut,
+          hauteur: Math.max(0, haut - allege),
+          allege,
+          surface,
+          pieceId: autre.id,
+          ouvertureId: o.id,
+        });
       }
     }
   }
@@ -143,12 +174,16 @@ export function percementsPropres(piece: Piece): PercementCote[] {
   for (const o of piece.ouvertures) {
     const seg = segmentOuverture(piece, o);
     if (!seg) continue;
+    const hauteur = hauteurEffective(piece, o);
     res.push({
       cote: o.cote,
       debut: seg.debut,
       largeur: seg.fin - seg.debut,
-      hauteur: hauteurEffective(piece, o),
+      hauteur,
       allege: Math.max(0, o.allege),
+      surface: (seg.fin - seg.debut) * hauteur,
+      pieceId: piece.id,
+      ouvertureId: o.id,
     });
   }
   return res;
@@ -183,11 +218,16 @@ export function metrePiece(
   d.plafondAPeindre = piece.plafondAPeindre ? sol : 0;
 
   const propres = percementsPropres(piece);
-  // Une ouverture saisie des deux côtés du mur n'est déduite qu'une fois.
-  const voisins = (plan ? percementsVoisins(piece, plan, catalogue) : []).filter(
-    (v) => !propres.some((p) => p.cote === v.cote && chevauchement(p, v) > 0.5 * Math.min(p.largeur, v.largeur)),
-  );
+  const tousVoisins = plan ? percementsVoisins(piece, plan, catalogue) : [];
+  const doublon = (p: PercementCote, v: PercementCote) =>
+    p.cote === v.cote && chevauchement(p, v) > 0.5 * Math.min(p.largeur, v.largeur);
+  // Une ouverture saisie des deux côtés du mur n'est déduite qu'une fois…
+  const voisins = tousVoisins.filter((v) => !propres.some((p) => doublon(p, v)));
   const percements = [...propres, ...voisins];
+  // … et n'est comptée dans les menuiseries que par l'une des deux pièces.
+  const comptesAilleurs = new Set(
+    propres.filter((p) => tousVoisins.some((v) => doublon(p, v) && v.pieceId < piece.id)).map((p) => p.ouvertureId),
+  );
   const seuilCm2 = Math.max(0, parametres.seuilDeductionOuverture) * 10000;
 
   for (let i = 0; i < piece.sommets.length; i++) {
@@ -199,8 +239,7 @@ export function metrePiece(
     let largeurAuSol = 0;
     for (const pc of percements) {
       if (pc.cote !== i) continue;
-      const s = pc.largeur * pc.hauteur;
-      if (parametres.deduireOuvertures && s > seuilCm2) deduit += s;
+      if (parametres.deduireOuvertures && pc.surface > seuilCm2) deduit += pc.largeur * pc.hauteur;
       if (ouvertureAuSol(pc.allege)) largeurAuSol += pc.largeur;
     }
     d.mursBruts[typeId] = (d.mursBruts[typeId] ?? 0) + brut;
@@ -208,17 +247,33 @@ export function metrePiece(
     d.plinthes += Math.max(0, l - largeurAuSol);
   }
 
-  let emprise = 0;
-  for (const e of piece.equipements) {
-    if (e.deduireSol) emprise += empriseDansPiece(piece, e);
-  }
-  d.sols[piece.revetementSolId ?? ''] = Math.max(0, sol - emprise);
+  d.sols[piece.revetementSolId ?? ''] = Math.max(0, sol - empriseEquipements(piece));
 
   for (const o of piece.ouvertures) {
+    if (comptesAilleurs.has(o.id)) continue;
     const k = cleOuverture(o.type, o.largeur, o.hauteur);
     d.ouvertures[k] = (d.ouvertures[k] ?? 0) + 1;
   }
   return d;
+}
+
+/**
+ * Emprise au sol des équipements « déduits », sans compter deux fois les
+ * parties qui se superposent (ex. ballon dans un placard) : somme des
+ * emprises moins les recouvrements deux à deux (exact tant que trois
+ * équipements ne se superposent pas au même endroit).
+ */
+function empriseEquipements(piece: Piece): number {
+  const coins = piece.equipements.filter((e) => e.deduireSol).map((e) => coinsEquipement(e));
+  let total = 0;
+  for (let i = 0; i < coins.length; i++) {
+    total += aire(decouperParConvexe(piece.sommets, coins[i]));
+    for (let j = i + 1; j < coins.length; j++) {
+      const commun = decouperParConvexe(coins[i], coins[j]);
+      if (commun.length >= 3) total -= aire(decouperParConvexe(piece.sommets, commun));
+    }
+  }
+  return Math.max(0, total);
 }
 
 function ajouterRecord(cible: Record<string, number>, source: Record<string, number>) {
@@ -424,9 +479,16 @@ export function comparerLignes(actuel: readonly LigneMetre[], renove: readonly L
 /** Arrondi décimal exact (8,925 → 8,93), sans les pièges de la virgule flottante. */
 export function arrondir(v: number, decimales = 2): number {
   if (!Number.isFinite(v)) return 0;
-  const signe = v < 0 ? -1 : 1;
-  const r = Number(`${Math.round(Number(`${Math.abs(v)}e${decimales}`))}e-${decimales}`);
-  return signe * r;
+  const abs = Math.abs(v);
+  // Résidus de calcul (1e-15…) : zéro. Évite aussi l'écriture exponentielle
+  // (« 1e-7 »), qui casserait l'astuce de la chaîne ci-dessous.
+  if (abs < 0.5 * 10 ** -decimales) return 0;
+  const propre = Number(abs.toFixed(12));
+  const texte = String(propre);
+  const r = texte.includes('e')
+    ? Math.round(propre * 10 ** decimales) / 10 ** decimales
+    : Number(`${Math.round(Number(`${texte}e${decimales}`))}e-${decimales}`);
+  return v < 0 ? -r : r;
 }
 
 const FORMAT_DECIMAL = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
