@@ -286,6 +286,7 @@ test('changer de niveau revient à l’outil Sélection et propose de relever ou
   await page.goto(`./#/chantier/${id}`);
   const outil = page.getByRole('button', { name: 'Ajouter un équipement' });
   await outil.click();
+  await page.getByRole('button', { name: 'WC', exact: true }).click();
   await expect(outil).toHaveAttribute('aria-pressed', 'true');
   await toucher(page, { x: 700, y: 150 }); // hors des pièces : rien n'est posé, l'outil reste actif
   await expect(outil).toHaveAttribute('aria-pressed', 'true');
@@ -294,4 +295,40 @@ test('changer de niveau revient à l’outil Sélection et propose de relever ou
   await expect(page.getByText('Aucune pièce sur ce niveau')).toBeVisible();
   await expect(outil).toHaveAttribute('aria-pressed', 'false');
   await expect(page.getByRole('group', { name: 'Type d’équipement' })).toHaveCount(0);
+});
+
+test('outils ouverture et équipement : tous les types se voient sans défiler', async ({ page }) => {
+  const id = await creerChantier(
+    page,
+    'Types e2e',
+    `projet.niveaux[0].actuel.pieces.push(fabrique.pieceRectangle('Séjour', 400, 300));`,
+  );
+  await page.goto(`./#/chantier/${id}`);
+  const vp = page.viewportSize()!;
+  for (const [outil, groupe, nombre, choix] of [
+    ['Ajouter un équipement', 'Type d’équipement', 11, 'WC'],
+    ['Ajouter une ouverture', 'Type d’ouverture', 5, 'Baie'],
+  ] as const) {
+    await page.getByRole('button', { name: outil }).click();
+    const types = page.getByRole('group', { name: groupe });
+    const boutons = types.getByRole('button');
+    await expect(boutons).toHaveCount(nombre);
+    const boite = (await types.boundingBox())!;
+    for (const b of await boutons.all()) {
+      const bb = (await b.boundingBox())!;
+      expect(bb.height).toBeGreaterThanOrEqual(44);
+      // Ni coupé par la liste, ni hors de l'écran.
+      expect(bb.x).toBeGreaterThanOrEqual(Math.max(0, boite.x) - 0.5);
+      expect(bb.x + bb.width).toBeLessThanOrEqual(Math.min(vp.width, boite.x + boite.width) + 0.5);
+      expect(bb.y + bb.height).toBeLessThanOrEqual(vp.height);
+    }
+    await types.getByRole('button', { name: choix, exact: true }).click();
+    if (tactile()) {
+      // Téléphone : la feuille se referme et le bandeau rappelle le type choisi.
+      await expect(types).toHaveCount(0);
+      await expect(page.getByRole('button', { name: groupe + ' : ' + choix })).toBeVisible();
+    } else {
+      await expect(types.getByRole('button', { name: choix, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    }
+  }
 });

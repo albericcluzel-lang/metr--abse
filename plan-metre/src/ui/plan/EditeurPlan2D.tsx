@@ -71,10 +71,11 @@ import './plan2d.css';
 /**
  * Zones occupées par les commandes flottantes, laissées libres par « Ajuster
  * la vue » (px). Sur grand écran, le plan est souvent limité par la hauteur :
- * on réserve aussi la place du bandeau des outils.
+ * on réserve aussi la place du bandeau des outils (deux lignes de types
+ * d'équipements).
  */
 const MARGES_VUE: Marges = { haut: 24, droite: 66, bas: 80, gauche: 74 };
-const MARGES_VUE_LARGE: Marges = { ...MARGES_VUE, haut: 80 };
+const MARGES_VUE_LARGE: Marges = { ...MARGES_VUE, haut: 124 };
 /** Déplacement (px) au-delà duquel un appui devient un glisser. */
 const SEUIL_GLISSER_SOURIS = 4;
 const SEUIL_GLISSER_TACTILE = 8;
@@ -810,7 +811,7 @@ export function EditeurPlan2D() {
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (formulaire || document.querySelector('.dialogue')) return;
+    if (formulaire || document.querySelector('.dialogue, .feuille[aria-modal="true"]')) return;
     const etat = useEtat.getState();
     if (e.key === 'Escape') {
       if (outil === 'dessin' && traceRef.current.length > 0) {
@@ -912,6 +913,7 @@ export function EditeurPlan2D() {
               <strong>Touchez un mur</strong> pour y poser :
             </>
           }
+          large={large}
           choix={{
             libelle: 'Type d’ouverture',
             valeur: typeOuverture,
@@ -927,6 +929,7 @@ export function EditeurPlan2D() {
               <strong>Touchez une pièce</strong> pour y poser :
             </>
           }
+          large={large}
           choix={{
             libelle: 'Type d’équipement',
             valeur: typeEquipement,
