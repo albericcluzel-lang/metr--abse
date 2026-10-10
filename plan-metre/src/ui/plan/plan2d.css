@@ -1,0 +1,590 @@
+/* Éditeur de plan 2D — classes préfixées « plan2d- ». */
+
+.plan2d {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+
+.plan2d-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  background: var(--fond);
+}
+
+.plan2d-svg.outil-dessin,
+.plan2d-svg.outil-ouverture,
+.plan2d-svg.outil-equipement,
+.plan2d-svg.outil-photo {
+  cursor: crosshair;
+}
+
+.plan2d-svg text {
+  font-family: inherit;
+}
+
+/* ─── Quadrillage ─────────────────────────────────────────────────────── */
+
+.plan2d-grille path {
+  fill: none;
+  stroke-width: 1px;
+  shape-rendering: crispEdges;
+}
+
+.plan2d-grille .fine {
+  stroke: var(--plan-grille);
+}
+
+.plan2d-grille .forte {
+  stroke: var(--plan-grille-forte);
+}
+
+/* ─── Pièces ──────────────────────────────────────────────────────────── */
+
+.plan2d-sol {
+  stroke: none;
+}
+
+.plan2d-sol-actif {
+  fill: var(--primaire);
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.plan2d-mur {
+  fill: var(--plan-mur);
+}
+
+.plan2d-mur.actif {
+  fill: var(--plan-mur-selection);
+}
+
+.plan2d-sans-mur {
+  stroke: var(--plan-mur);
+  fill: none;
+  stroke-linecap: butt;
+}
+
+.plan2d-cote-selection path {
+  fill: var(--primaire);
+}
+
+.plan2d-cote-selection line {
+  stroke: var(--primaire);
+  stroke-linecap: round;
+}
+
+/* Ouvertures : découpe du mur et symbole */
+.plan2d-ouverture-decoupe {
+  fill: var(--surface);
+  stroke: none;
+}
+
+.plan2d-ouverture-trait {
+  stroke: var(--plan-mur);
+  stroke-linecap: butt;
+}
+
+.plan2d-ouverture-vantail {
+  stroke: var(--plan-cote);
+  stroke-linecap: round;
+}
+
+.plan2d-ouverture-arc {
+  fill: none;
+  stroke: var(--plan-cote);
+  opacity: 0.75;
+}
+
+.plan2d-ouverture.selectionnee .plan2d-ouverture-decoupe {
+  fill: var(--primaire-clair);
+  stroke: var(--primaire);
+}
+
+.plan2d-ouverture.selectionnee .plan2d-ouverture-trait,
+.plan2d-ouverture.selectionnee .plan2d-ouverture-vantail,
+.plan2d-ouverture.selectionnee .plan2d-ouverture-arc {
+  stroke: var(--primaire);
+  opacity: 1;
+}
+
+/* Équipements */
+.plan2d-equipement {
+  stroke: var(--plan-mur);
+  fill: none;
+}
+
+.plan2d-equipement-cadre {
+  fill: #fff;
+  fill-opacity: 0.92;
+}
+
+.plan2d-equipement-plein {
+  fill: var(--plan-mur);
+}
+
+.plan2d-equipement.selectionne {
+  stroke: var(--primaire);
+}
+
+.plan2d-equipement.selectionne .plan2d-equipement-cadre {
+  fill: var(--primaire-clair);
+}
+
+/* ─── Textes (cotes, étiquettes) ──────────────────────────────────────── */
+
+.plan2d-cote,
+.plan2d-etiquette,
+.plan2d-trace-longueur {
+  paint-order: stroke;
+  stroke: rgba(255, 255, 255, 0.92);
+  stroke-linejoin: round;
+  pointer-events: none;
+  text-anchor: middle;
+}
+
+.plan2d-cote {
+  font-size: 11.5px;
+  font-weight: 600;
+  fill: var(--plan-cote);
+  stroke-width: 3px;
+  dominant-baseline: central;
+}
+
+.plan2d-cote.active {
+  fill: var(--primaire);
+  font-weight: 750;
+}
+
+.plan2d-etiquette {
+  stroke-width: 4px;
+  fill: var(--texte);
+}
+
+.plan2d-etiquette-nom {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.plan2d-etiquette-surface {
+  font-size: 12.5px;
+  font-weight: 500;
+  fill: var(--texte-2);
+}
+
+.plan2d-etiquette.active .plan2d-etiquette-nom {
+  fill: var(--primaire-fonce);
+}
+
+/* ─── Poignées ────────────────────────────────────────────────────────── */
+
+.plan2d-poignee-sommet {
+  fill: #fff;
+  stroke: var(--primaire);
+  stroke-width: 2.5px;
+  filter: drop-shadow(0 1px 2px rgba(27, 33, 64, 0.25));
+}
+
+.plan2d-poignee-sommet.selectionnee {
+  fill: var(--primaire);
+  stroke: #fff;
+}
+
+.plan2d-poignee-milieu circle {
+  fill: var(--primaire-clair);
+  stroke: var(--primaire);
+  stroke-width: 1.5px;
+}
+
+.plan2d-poignee-milieu line {
+  stroke: var(--primaire);
+  stroke-width: 1.5px;
+  opacity: 0.6;
+}
+
+.plan2d-poignee-milieu path {
+  stroke: var(--primaire);
+  stroke-width: 2px;
+  stroke-linecap: round;
+}
+
+/* ─── Épingles photo ──────────────────────────────────────────────────── */
+
+.plan2d-epingle path {
+  fill: var(--accent);
+  stroke: #fff;
+  stroke-width: 2px;
+  filter: drop-shadow(0 2px 3px rgba(27, 33, 64, 0.3));
+}
+
+.plan2d-epingle.selectionnee path {
+  fill: var(--primaire);
+}
+
+.plan2d-epingle-icone {
+  color: #fff;
+}
+
+/* ─── Tracé d'une nouvelle pièce ──────────────────────────────────────── */
+
+.plan2d-trace-ligne {
+  fill: none;
+  stroke: var(--primaire);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.plan2d-trace-elastique {
+  stroke: var(--primaire);
+  stroke-width: 2px;
+  stroke-dasharray: 7 5;
+}
+
+.plan2d-trace-fermeture {
+  stroke: var(--texte-3);
+  stroke-width: 1px;
+  stroke-dasharray: 3 4;
+}
+
+.plan2d-trace-point {
+  fill: var(--primaire);
+  stroke: #fff;
+  stroke-width: 2px;
+}
+
+.plan2d-trace-premier {
+  fill: #fff;
+  stroke: var(--primaire);
+  stroke-width: 3px;
+}
+
+.plan2d-trace-premier.actif {
+  fill: var(--primaire);
+}
+
+.plan2d-reticule circle {
+  fill: none;
+  stroke: var(--primaire);
+  stroke-width: 2px;
+}
+
+.plan2d-reticule path {
+  stroke: var(--primaire);
+  stroke-width: 1.5px;
+}
+
+.plan2d-reticule.sommet circle {
+  stroke: var(--accent);
+  stroke-width: 3px;
+}
+
+.plan2d-trace-longueur {
+  font-size: 13px;
+  font-weight: 700;
+  fill: var(--primaire-fonce);
+  stroke-width: 4px;
+  dominant-baseline: central;
+}
+
+/* ─── Palette d'outils (colonne flottante à gauche) ───────────────────── */
+
+.plan2d-palette {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan2d-groupe {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 2px;
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--ombre);
+}
+
+/* Bandeau d'aide et choix du type (outils Ouverture, Équipement, Dessin, Photo) */
+.plan2d-bandeau {
+  position: absolute;
+  top: 10px;
+  left: 66px;
+  right: 64px;
+  max-width: 760px;
+  z-index: 10;
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--ombre);
+  padding: 8px 10px;
+}
+
+.plan2d-bandeau-aide {
+  margin: 0;
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.plan2d-bandeau-aide strong {
+  color: var(--texte);
+}
+
+.plan2d-puces {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  margin: 6px -10px -2px;
+  padding: 0 10px 2px;
+  scrollbar-width: thin;
+}
+
+/* Téléphone : un fondu à droite signale que la liste défile. */
+@media (max-width: 899px) {
+  .plan2d-puces {
+    mask-image: linear-gradient(to right, #000 82%, transparent);
+    padding-right: 36px;
+  }
+}
+
+/* Grand écran : aide et choix du type sur une seule ligne. */
+@media (min-width: 900px) {
+  .plan2d-bandeau {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 8px 6px 14px;
+  }
+
+  .plan2d-bandeau-aide {
+    flex: 0 1 auto;
+    max-width: 260px;
+  }
+
+  .plan2d-puces {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+  }
+}
+
+.plan2d-puce {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: var(--rayon-pilule);
+  border: 1px solid var(--bordure);
+  background: var(--surface);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--texte);
+}
+
+.plan2d-puce:hover {
+  background: var(--surface-2);
+}
+
+.plan2d-puce[aria-pressed='true'] {
+  background: var(--primaire);
+  border-color: var(--primaire);
+  color: #fff;
+}
+
+/* Barre du tracé, au-dessus de la pilule « Plan actuel / Plan rénové » */
+.plan2d-barre-dessin {
+  position: absolute;
+  left: 50%;
+  bottom: 70px;
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 20px);
+  padding: 5px;
+  background: var(--surface);
+  border-radius: var(--rayon-pilule);
+  box-shadow: var(--ombre-forte);
+}
+
+.plan2d-barre-dessin .bouton-icone {
+  border-radius: 50%;
+}
+
+.plan2d-barre-info {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texte-2);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+
+/* ─── État vide ───────────────────────────────────────────────────────── */
+
+.plan2d-vide {
+  position: absolute;
+  left: 74px;
+  right: 64px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 9;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.plan2d-vide-carte {
+  pointer-events: auto;
+  width: 100%;
+  max-width: 330px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.plan2d-vide-carte svg {
+  color: var(--texte-3);
+}
+
+.plan2d-vide-carte h2 {
+  font-size: 17px;
+}
+
+.plan2d-vide-carte p {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--texte-2);
+}
+
+/* ─── Panneau de propriétés ───────────────────────────────────────────── */
+
+/* Sur téléphone (feuille du bas sans voile) : on laisse le plan visible. */
+.feuille:has(.plan2d-proprietes) {
+  max-height: min(42dvh, 400px);
+}
+
+.plan2d-panneau {
+  position: absolute;
+  top: 64px;
+  right: 10px;
+  width: 340px;
+  max-height: calc(100% - 64px - 72px);
+  z-index: 12;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--rayon);
+  box-shadow: var(--ombre-forte);
+  animation: apparition 0.15s ease-out;
+}
+
+.plan2d-panneau-entete {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 2px 16px;
+}
+
+.plan2d-panneau-entete h2 {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.plan2d-panneau-corps {
+  overflow-y: auto;
+  padding: 6px 16px 16px;
+}
+
+.plan2d-rappel {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.plan2d-rappel strong {
+  color: var(--texte);
+}
+
+.plan2d-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.plan2d-actions .bouton {
+  flex: 1 1 auto;
+}
+
+.plan2d-rotation {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.plan2d-rotation .bouton {
+  margin-bottom: 14px;
+  padding: 0 12px;
+}
+
+.plan2d-champ-segments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.plan2d-champ-segments .segments {
+  align-self: flex-start;
+  flex-wrap: wrap;
+}
+
+.plan2d-champ-segments .segments button {
+  min-height: 44px;
+}
+
+.plan2d-photo-vignette {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100px;
+  max-height: 160px;
+  margin-bottom: 10px;
+  border-radius: var(--rayon-petit);
+  background: var(--surface-2);
+  color: var(--texte-3);
+  overflow: hidden;
+}
+
+.plan2d-photo-vignette img {
+  display: block;
+  max-width: 100%;
+  max-height: 160px;
+  object-fit: contain;
+}
+
+.plan2d-photo-legende {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
