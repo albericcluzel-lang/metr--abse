@@ -1,7 +1,7 @@
 // Aperçus SVG du relevé : vignette d'une zone, tracé en direct du mètre laser,
 // assemblage des zones sur le plan cible.
 
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { Point } from '../../model/types';
 import { aire, aireSignee, boiteEnglobante, distance, pointEtiquette } from '../../geometrie/polygone';
 import { formaterValeur } from '../../metre/calcul';
@@ -171,7 +171,7 @@ export interface PieceApercu {
 }
 
 /** Assemblage : pièces existantes du plan cible (grisées) et nouvelles pièces. */
-export function ApercuAssemblage({
+export const ApercuAssemblage = memo(function ApercuAssemblage({
   existantes,
   nouvelles,
 }: {
@@ -220,4 +220,4 @@ export function ApercuAssemblage({
       })}
     </svg>
   );
-}
+});

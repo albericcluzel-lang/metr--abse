@@ -548,3 +548,32 @@ test('trente pièces relevées : rangées lisibles sur le plan, aperçu sans nom
   // Plan : rangées à la forme de l'écran, chaque pièce nommée sans avoir à zoomer.
   await expect(page.locator('[data-etiquette]')).toHaveCount(30);
 });
+
+test('finalisation de trente pièces : la saisie d’un nom reste fluide', async ({ page, browserName }, info) => {
+  test.skip(browserName !== 'chromium', 'ralentissement du processeur par le protocole de Chrome');
+  const id = await creerChantier(page, 'Trente noms');
+  await brouillonDePieces(page, id, 30);
+  await page.goto(`./#/chantier/${id}/releve`);
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  const champ = page.getByLabel('Nom de la zone 1', { exact: true });
+  await expect(champ).toHaveValue('Pièce 1');
+
+  // Téléphone de milieu de gamme : processeur ralenti 4 fois.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__longues = [];
+    new PerformanceObserver((l) => l.getEntries().forEach((e) => w.__longues.push(Math.round(e.duration)))).observe({ entryTypes: ['longtask'] });
+  });
+  await champ.click();
+  await champ.press('End');
+  await champ.pressSequentially('Accueil', { delay: 80 });
+  await expect(champ).toHaveValue('Pièce 1Accueil');
+  await page.waitForTimeout(500);
+  const longues: number[] = await page.evaluate(() => (window as any).__longues);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  info.annotations.push({ type: 'longues tâches (ms)', description: JSON.stringify(longues) });
+  // Aucune frappe ne bloque l’écran plus de 150 ms (260 à 480 ms par touche avant correction, moins de 70 ms après).
+  expect(Math.max(0, ...longues)).toBeLessThan(150);
+});

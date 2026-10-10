@@ -1,11 +1,14 @@
 // Finalisation de la capture : nom et hauteur de chaque zone, niveau et plan
 // cibles, type de mur, redressement des angles, aperçu de l'assemblage, puis
 // ajout des pièces au plan en une seule étape d'annulation.
+//
+// Avec beaucoup de zones, la saisie reste fluide : une frappe ne redessine
+// que la carte de sa zone, et l'aperçu suit en différé.
 
-import { useMemo, useState } from 'react';
+import { memo, useCallback, useDeferredValue, useMemo, useState } from 'react';
 import { NOMS_PIECES, TYPE_MUR_DEFAUT_ID } from '../../model/catalogue';
 import { copierPlanPourRenovation, nouveauNiveau } from '../../model/fabrique';
-import type { ID, Niveau, Plan, Projet, Variante } from '../../model/types';
+import type { ID, Niveau, Plan, Point, Projet, Variante } from '../../model/types';
 import { useEtat } from '../../store/etat';
 import {
   BarreHaut,
@@ -30,6 +33,46 @@ function planCible(niveau: Niveau | null, variante: Variante): Plan {
   // Le plan rénové, s'il n'existe pas encore, partira d'une copie du plan actuel.
   return variante === 'renove' ? (niveau.renove ?? niveau.actuel) : niveau.actuel;
 }
+
+/** Carte d'une zone : vignette, surface, nom et hauteur. */
+const CarteZone = memo(function CarteZone({
+  id,
+  index,
+  points,
+  nom,
+  hauteur,
+  onNom,
+  onHauteur,
+}: {
+  id: string;
+  index: number;
+  points: readonly Point[];
+  nom: string;
+  hauteur: number;
+  onNom: (id: string, nom: string) => void;
+  onHauteur: (id: string, hauteur: number) => void;
+}) {
+  return (
+    <div className="carte releve-carte-zone">
+      <div className="releve-carte-zone-entete">
+        <VignetteZone points={points} taille={48} />
+        <span className="releve-zone-surface">{surfaceM2(points)}</span>
+      </div>
+      <div className="releve-carte-zone-champs">
+        <ChampTexte libelle={`Nom de la zone ${index + 1}`} valeur={nom} onChange={(v) => onNom(id, v)} suggestions={NOMS_PIECES} />
+        <ChampNombre
+          libelle="Hauteur sous plafond"
+          valeur={hauteur}
+          onChange={(v) => onHauteur(id, v)}
+          unite="cm"
+          min={50}
+          max={1000}
+          decimales={0}
+        />
+      </div>
+    </div>
+  );
+});
 
 function suggestionNiveau(projet: Projet): string {
   const existants = new Set(projet.niveaux.map((n) => n.nom));
@@ -85,9 +128,19 @@ export function Finalisation({
     () => placerZones(zones, { redresser, rapport, existantes: boitesDesPieces(cible.pieces, projet.catalogue) }),
     [zones, redresser, rapport, cible, projet.catalogue],
   );
+  const changerNom = useCallback((id: string, nom: string) => setNoms((n) => ({ ...n, [id]: nom })), []);
+  const changerHauteur = useCallback((id: string, h: number) => setHauteurs((x) => ({ ...x, [id]: h })), []);
+  // L'aperçu suit la saisie en différé : la frappe d'un nom n'attend pas son redessin.
+  const nomsApercu = useDeferredValue(noms);
+  const hauteursApercu = useDeferredValue(hauteurs);
   const nouvelles = useMemo(
-    () => construirePieces(placees, { noms, hauteurs, typeMurDefautId: typeMurId }),
-    [placees, noms, hauteurs, typeMurId],
+    () => construirePieces(placees, { noms: nomsApercu, hauteurs: hauteursApercu, typeMurDefautId: typeMurId }),
+    [placees, nomsApercu, hauteursApercu, typeMurId],
+  );
+  const existantesApercu = useMemo(() => cible.pieces.map((p) => p.sommets), [cible]);
+  const nouvellesApercu = useMemo(
+    () => nouvelles.map((p, i) => ({ id: placees[i].zone.id, nom: p.nom, points: p.sommets })),
+    [nouvelles, placees],
   );
   const planApercu = useMemo<Plan>(() => ({ pieces: [...cible.pieces, ...nouvelles] }), [cible, nouvelles]);
 
@@ -144,10 +197,7 @@ export function Finalisation({
         </div>
         <div className="releve-cadre-apercu releve-cadre-assemblage">
           {vue === '2d' ? (
-            <ApercuAssemblage
-              existantes={cible.pieces.map((p) => p.sommets)}
-              nouvelles={nouvelles.map((p, i) => ({ id: placees[i].zone.id, nom: p.nom, points: p.sommets }))}
-            />
+            <ApercuAssemblage existantes={existantesApercu} nouvelles={nouvellesApercu} />
           ) : (
             <div className="releve-apercu-3d">
               <Vue3D plan={planApercu} catalogue={projet.catalogue} />
@@ -157,29 +207,16 @@ export function Finalisation({
 
         <h2 className="titre-section">Pièces</h2>
         {zones.map((z, i) => (
-          <div key={z.id} className="carte releve-carte-zone">
-            <div className="releve-carte-zone-entete">
-              <VignetteZone points={placees[i]?.points ?? z.points} taille={48} />
-              <span className="releve-zone-surface">{surfaceM2(placees[i]?.points ?? z.points)}</span>
-            </div>
-            <div className="releve-carte-zone-champs">
-              <ChampTexte
-                libelle={`Nom de la zone ${i + 1}`}
-                valeur={noms[z.id] ?? ''}
-                onChange={(v) => setNoms({ ...noms, [z.id]: v })}
-                suggestions={NOMS_PIECES}
-              />
-              <ChampNombre
-                libelle="Hauteur sous plafond"
-                valeur={hauteurs[z.id] ?? z.hauteur}
-                onChange={(v) => setHauteurs({ ...hauteurs, [z.id]: v })}
-                unite="cm"
-                min={50}
-                max={1000}
-                decimales={0}
-              />
-            </div>
-          </div>
+          <CarteZone
+            key={z.id}
+            id={z.id}
+            index={i}
+            points={placees[i]?.points ?? z.points}
+            nom={noms[z.id] ?? ''}
+            hauteur={hauteurs[z.id] ?? z.hauteur}
+            onNom={changerNom}
+            onHauteur={changerHauteur}
+          />
         ))}
 
         <h2 className="titre-section">Destination</h2>
