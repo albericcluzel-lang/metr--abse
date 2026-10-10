@@ -102,9 +102,17 @@ export function aireAnglesM2(angles: readonly Point3[]): number {
   return aire(anglesEnPlan(angles)) / 10000;
 }
 
-/** Altitude du sol (m) : moyenne des angles en cours, sinon sol de la dernière zone. */
+/** Altitude (m) des angles : médiane, qu'un angle douteux ne déplace pas ; null sans angle. */
+export function altitudeAngles(angles: readonly Point3[]): number | null {
+  if (angles.length === 0) return null;
+  const y = angles.map((a) => a.y).sort((a, b) => a - b);
+  const m = Math.floor(y.length / 2);
+  return y.length % 2 ? y[m] : (y[m - 1] + y[m]) / 2;
+}
+
+/** Altitude du sol (m) : celle des angles en cours, sinon sol de la dernière zone. */
 export function altitudeSol(etat: Pick<EtatRA, 'angles' | 'zones'>): number | null {
-  if (etat.angles.length > 0) return etat.angles.reduce((s, a) => s + a.y, 0) / etat.angles.length;
+  if (etat.angles.length > 0) return altitudeAngles(etat.angles);
   const derniere = etat.zones[etat.zones.length - 1];
   return derniere ? derniere.sol : null;
 }
@@ -134,6 +142,16 @@ export function reduireRA(etat: EtatRA, action: ActionRA): EtatRA {
       if (n >= 3 && distanceHorizontale(p, etat.angles[0]) < SEUIL_FERMETURE_M) return fermer(etat);
       if (n >= 1 && distanceHorizontale(p, etat.angles[n - 1]) < ECART_MIN_ANGLES_M) {
         return { ...etat, message: 'Angle trop proche du précédent : visez l’angle suivant.' };
+      }
+      // Dessus d'une pile de plaques, d'un établi… : pas au niveau du sol de la pièce.
+      const ecart = n >= 1 ? p.y - altitudeAngles(etat.angles)! : 0;
+      if (Math.abs(ecart) > TOLERANCE_SOL_M) {
+        return {
+          ...etat,
+          message: `Point visé ${Math.round(Math.abs(ecart) * 100)} cm plus ${ecart > 0 ? 'haut' : 'bas'} que ${
+            n > 1 ? 'les autres angles' : 'le premier angle'
+          } : visez le sol au pied du mur.`,
+        };
       }
       return {
         ...etat,
@@ -320,7 +338,9 @@ export interface PointVise {
 /**
  * Point visé au sol, d'après les résultats de visée triés du plus proche au
  * plus loin le long du rayon (ordre donné par WebXR) :
- *  - une surface de sol est retenue ;
+ *  - une surface de sol est retenue, sauf si elle n'est pas au niveau des
+ *    angles déjà posés (`niveauAngles`) : dessus d'une pile de plaques, d'un
+ *    établi… ; elle est alors ignorée ;
  *  - un mur touché près du sol donne le point du sol à son pied ; touché plus
  *    haut, il masque tout ce qui est derrière lui (rien n'est retenu) ;
  *  - faute de surface, le rayon est prolongé jusqu'au plan du sol connu
@@ -330,9 +350,13 @@ export function viseeSol(
   resultats: readonly ResultatVisee[],
   sol: number | null,
   rayon: { origine: Point3; direction: Point3 } | null,
+  niveauAngles: number | null = null,
 ): PointVise | null {
   for (const r of resultats) {
-    if (estSurfaceSol(r.matrice)) return { point: r.position, matrice: r.matrice, estime: false };
+    if (estSurfaceSol(r.matrice)) {
+      if (niveauAngles !== null && Math.abs(r.position.y - niveauAngles) > TOLERANCE_SOL_M) continue;
+      return { point: r.position, matrice: r.matrice, estime: false };
+    }
     if (estSurfaceVerticale(r.matrice)) {
       const h = sol === null ? NaN : r.position.y - sol;
       if (sol !== null && h > -TOLERANCE_SOL_M && h < HAUTEUR_PIED_MUR_M) {

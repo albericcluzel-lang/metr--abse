@@ -234,3 +234,18 @@ describe('visée d’un angle au sol', () => {
     expect(ra.visee).toBeNull();
   });
 });
+
+describe('surface surélevée', () => {
+  it('le dessus d’une pile de plaques n’est pas pris pour le sol des angles déjà posés', async () => {
+    const { ra, session, rendu } = await demarrer();
+    ra.dessiner(jouer([placer(0, 0), placer(4, 0)]));
+    const oeil = p(2, 1.5, SOL + 1.4);
+    const pile = p(4, 3, SOL + 0.8);
+    // La pile est touchée d'abord, le sol ensuite (plus loin sur le rayon).
+    rendu.imageSession(image(session, { oeil, cible: pile, resultats: [{ position: pile }, { position: p(4.7, 3.35) }] }));
+    attendreProche(ra.visee, p(4.7, 3.35));
+    // Pile seule : point estimé sur le plan du sol, pas sur la pile.
+    rendu.imageSession(image(session, { oeil, cible: pile, resultats: [{ position: pile }] }));
+    expect(ra.visee?.y).toBeCloseTo(SOL, 3);
+  });
+});

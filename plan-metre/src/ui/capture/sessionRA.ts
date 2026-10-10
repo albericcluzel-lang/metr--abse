@@ -29,6 +29,7 @@ import {
   WebGLRenderer,
 } from 'three';
 import {
+  altitudeAngles,
   altitudeSol,
   distanceHorizontale,
   poseSegment,
@@ -328,7 +329,7 @@ export class SessionRA {
         const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
         rayon = { origine: { x: o.x, y: o.y, z: o.z }, direction: { x: dir.x, y: dir.y, z: dir.z } };
       }
-      vise = viseeSol(resultats, sol, rayon);
+      vise = viseeSol(resultats, sol, rayon, etat ? altitudeAngles(etat.angles) : null);
     }
     const point = vise?.point ?? null;
     const matrice = vise?.matrice ?? null;

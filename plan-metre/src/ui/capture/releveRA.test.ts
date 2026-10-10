@@ -118,10 +118,24 @@ describe('hauteur sous plafond', () => {
     expect(e.hauteurMesuree).toBe(true);
   });
 
-  it('le sol est la moyenne des angles posés', () => {
+  it('le sol est la médiane des angles posés', () => {
     const e = jouer([placer(0, 0, -1.41), placer(4, 0, -1.39), placer(4, 3, -1.4), { type: 'fermer' }]);
     expect(altitudeSol(e)).toBeCloseTo(-1.4);
     expect(reduireRA(e, { type: 'mesurer-hauteur', point: p(1, 1, 1.1) }).hauteur).toBe(250);
+    // Un angle douteux ne déplace pas le sol (la moyenne le ferait).
+    const angles = [p(0, 0, -1.41), p(4, 0, -1.39), p(4, 3, -1.33), p(0, 3, -1.4)].map((a, i) => ({ ...a, id: i + 1 }));
+    expect(altitudeSol({ angles, zones: [] })).toBeCloseTo(-1.395);
+  });
+
+  it('refuse un angle posé sur une surface surélevée (pile de plaques, établi)', () => {
+    let e = jouer([placer(0, 0), placer(4, 0), placer(4, 3, SOL + 0.8)]);
+    expect(e.angles).toHaveLength(2);
+    expect(e.message).toMatch(/80 cm plus haut que les autres angles/);
+    // Le sol inégal de quelques centimètres reste accepté.
+    e = jouer([placer(4, 3, SOL + 0.03), placer(0, 3), { type: 'fermer' }], e);
+    expect(e.etape).toBe('hauteur');
+    expect(reduireRA(e, { type: 'mesurer-hauteur', point: p(2, 0, SOL + 2.5) }).hauteur).toBe(250);
+    expect(jouer([placer(0, 0), placer(4, 0, SOL - 0.2)]).message).toMatch(/20 cm plus bas que le premier angle/);
   });
 
   it('refuse une hauteur mesurée improbable', () => {
