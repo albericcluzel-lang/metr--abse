@@ -81,19 +81,41 @@ export function avecSommets(avant: Piece, sommets: Sommet[]): Piece {
 }
 
 /**
- * Coupe le côté `cote` en deux par un nouveau sommet (au milieu, ou au
- * projeté de `point` sur le côté). Le nouveau sommet reprend le type de mur
- * du côté coupé. Une ouverture du côté coupé reste sur la moitié qui contient
- * son milieu, avec sa position recalculée.
+ * Abscisse où couper le côté `cote` (au milieu, ou au projeté de `point`).
+ * Une coupe qui tomberait dans une ouverture est reportée sur son tableau le
+ * plus proche, pour ne jamais déplacer ni rogner l'ouverture. null si aucun
+ * point de coupe ne convient (trop près d'un sommet, ou ouverture sur tout
+ * le côté).
  */
-export function insererSommet(piece: Piece, cote: number, point?: Point): Piece {
+export function abscisseDeCoupe(piece: Piece, cote: number, point?: Point): number | null {
   const n = piece.sommets.length;
-  if (cote < 0 || cote >= n) return piece;
-  const a = piece.sommets[cote];
+  if (cote < 0 || cote >= n) return null;
   const l = longueurCote(piece.sommets, cote);
   const t = point ? borner(abscisseSurCote(piece.sommets, cote, point), 0, l) : l / 2;
+  const ouvertures = piece.ouvertures.filter((o) => o.cote === cote);
+  const dansOuverture = (x: number) => ouvertures.some((o) => x > o.position + 1e-6 && x < o.position + o.largeur - 1e-6);
   // Trop près d'un sommet existant : on ne crée pas de côté minuscule.
-  if (t < 1 || t > l - 1) return piece;
+  const valide = (x: number) => x >= 1 && x <= l - 1 && !dansOuverture(x);
+  if (!dansOuverture(t)) return valide(t) ? t : null;
+  const tableaux = ouvertures
+    .flatMap((o) => [o.position, o.position + o.largeur])
+    .filter(valide)
+    .sort((x, y) => Math.abs(x - t) - Math.abs(y - t));
+  return tableaux[0] ?? null;
+}
+
+/**
+ * Coupe le côté `cote` en deux par un nouveau sommet (au milieu, ou au
+ * projeté de `point` sur le côté, reporté hors des ouvertures : cf.
+ * abscisseDeCoupe). Le nouveau sommet reprend le type de mur du côté coupé.
+ * Les ouvertures du côté coupé passent sur la moitié qui les contient, à la
+ * même place dans le plan.
+ */
+export function insererSommet(piece: Piece, cote: number, point?: Point): Piece {
+  const t = abscisseDeCoupe(piece, cote, point);
+  if (t === null) return piece;
+  const a = piece.sommets[cote];
+  const l = longueurCote(piece.sommets, cote);
   const m = pointSurCote(piece.sommets, cote, t);
   const nouveau: Sommet = { x: arrondi(m.x, 0.01), y: arrondi(m.y, 0.01) };
   if (a.typeMurId !== undefined) nouveau.typeMurId = a.typeMurId;

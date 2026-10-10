@@ -1,11 +1,12 @@
 // Actions de l'éditeur de plan qui passent par l'état global : chacune est
 // une étape d'annulation (ou se regroupe avec ses voisines par `cle`).
 
+import { longueurCote } from '../../geometrie/polygone';
 import { dupliquerPiece } from '../../model/fabrique';
 import type { ID, Piece, TypeOuverture } from '../../model/types';
 import { planCourant, useEtat, type OptionsModification } from '../../store/etat';
 import { confirmer, notifier } from '../commun/dialogues';
-import { insererSommet, orthogonaliserPiece, ouvertureSurCote, supprimerSommet } from './operations';
+import { abscisseDeCoupe, insererSommet, orthogonaliserPiece, ouvertureSurCote, supprimerSommet } from './operations';
 
 /** Pièce du plan affiché. */
 export function pieceDuPlan(id: ID): Piece | null {
@@ -57,14 +58,16 @@ export function retirerSommet(pieceId: ID, index: number): void {
 
 export function couperCote(pieceId: ID, index: number): void {
   const piece = pieceDuPlan(pieceId);
-  if (!piece) return;
-  const resultat = insererSommet(piece, index);
-  if (resultat === piece) {
-    notifier('Côté trop court pour être coupé');
+  if (!piece || !piece.sommets[index]) return;
+  const t = abscisseDeCoupe(piece, index);
+  if (t === null) {
+    notifier(longueurCote(piece.sommets, index) < 2 ? 'Côté trop court pour être coupé' : 'Une ouverture occupe tout le côté : impossible de le couper');
     return;
   }
-  modifierPiece(pieceId, () => resultat);
+  modifierPiece(pieceId, () => insererSommet(piece, index));
   useEtat.getState().selectionner({ type: 'sommet', pieceId, index: index + 1 });
+  // La coupe ne passe jamais dans une ouverture : elle est reportée sur son bord.
+  if (Math.abs(t - longueurCote(piece.sommets, index) / 2) > 0.05) notifier('Côté coupé au bord de l’ouverture, qui reste en place');
 }
 
 export function ajouterOuvertureAuMilieu(pieceId: ID, index: number, type: TypeOuverture): void {

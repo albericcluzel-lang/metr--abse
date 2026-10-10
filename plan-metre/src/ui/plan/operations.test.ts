@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { metrePiece } from '../../metre/calcul';
+import { catalogueParDefaut, parametresParDefaut } from '../../model/catalogue';
 import { nouvelEquipement, nouvelleOuverture, nouvellePiece, pieceRectangle } from '../../model/fabrique';
-import type { Piece } from '../../model/types';
+import type { Ouverture, Piece } from '../../model/types';
 import { aire, longueurCote } from '../../geometrie/polygone';
 import {
   changerLongueurCote,
@@ -12,6 +14,7 @@ import {
   orthogonaliserPiece,
   ouvertureSurCote,
   placerEquipement,
+  pointSurCote,
   seCroise,
   supprimerSommet,
   transfererEquipement,
@@ -29,6 +32,16 @@ function sejour(): Piece {
 }
 
 const ouv = (p: Piece, id: string) => p.ouvertures.find((o) => o.id === id)!;
+
+/** Début et fin d'une ouverture dans le repère du plan. */
+function emprise(p: Piece, o: Ouverture) {
+  return [pointSurCote(p.sommets, o.cote, o.position), pointSurCote(p.sommets, o.cote, o.position + o.largeur)];
+}
+
+function metre(p: Piece) {
+  const d = metrePiece(p, catalogueParDefaut(), parametresParDefaut());
+  return { murs: d.mursAPeindre, plinthes: d.plinthes, sol: d.surfaceSol };
+}
 
 describe('insérer un sommet', () => {
   it('coupe le côté au milieu et réindexe les ouvertures', () => {
@@ -49,11 +62,40 @@ describe('insérer un sommet', () => {
     expect('typeMurId' in insererSommet(sejour(), 0).sommets[1]).toBe(false);
   });
 
-  it('garde sur la première moitié une ouverture qui chevauche la coupe, recalée', () => {
+  it('reporte la coupe sur le tableau le plus proche d’une ouverture qui la chevauche', () => {
     const base = sejour();
-    base.ouvertures = [{ ...nouvelleOuverture('porte', 0, 150), id: 'p' }]; // centre 191,5
+    base.ouvertures = [{ ...nouvelleOuverture('porte', 0, 150), id: 'p' }]; // de 150 à 233
     const p = insererSommet(base, 0);
-    expect(ouv(p, 'p')).toMatchObject({ cote: 0, position: 200 - 83 });
+    expect(p.sommets[1]).toMatchObject({ x: 233, y: 0 });
+    expect(ouv(p, 'p')).toMatchObject({ cote: 0, position: 150, largeur: 83 });
+  });
+
+  it('ne déplace ni ne rogne une porte ou une baie centrées sur le côté coupé', () => {
+    for (const type of ['porte', 'baie'] as const) {
+      const base = pieceRectangle('Séjour', 400, 300);
+      base.ouvertures = [ouvertureSurCote(base, type, 0)];
+      const avant = base.ouvertures[0];
+      const p = insererSommet(base, 0);
+      expect(p.sommets).toHaveLength(5);
+      const apres = p.ouvertures[0];
+      expect(apres.largeur).toBe(avant.largeur);
+      expect(apres.position + apres.largeur).toBeLessThanOrEqual(longueurCote(p.sommets, apres.cote));
+      expect(emprise(p, apres)).toEqual(emprise(base, avant));
+      expect(metre(p)).toEqual(metre(base));
+    }
+  });
+
+  it('reporte aussi une coupe demandée en un point situé dans une ouverture', () => {
+    const base = sejour();
+    const p = insererSommet(base, 0, { x: 80, y: 10 }); // dans la porte (de 50 à 133)
+    expect(p.sommets[1]).toMatchObject({ x: 50, y: 0 });
+    expect(emprise(p, ouv(p, 'porte'))).toEqual(emprise(base, ouv(base, 'porte')));
+  });
+
+  it('refuse de couper un côté entièrement occupé par une ouverture', () => {
+    const base = pieceRectangle('Placard', 200, 60);
+    base.ouvertures = [nouvelleOuverture('passage', 0, 0, { largeur: 200 })];
+    expect(insererSommet(base, 0)).toBe(base);
   });
 
   it('coupe le dernier côté (retour au premier sommet)', () => {
