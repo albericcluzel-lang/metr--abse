@@ -185,7 +185,6 @@ export class SessionRA {
     session.addEventListener('select', this.surSelect);
     session.addEventListener('visibilitychange', this.surChangementVisibilite);
     racine.addEventListener('beforexrselect', this.surAvantSelection);
-    renderer.setAnimationLoop(this.image);
   }
 
   /**
@@ -218,6 +217,11 @@ export class SessionRA {
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
       renderer.xr.setReferenceSpaceType('local');
+      // Boucle posée avant setSession, comme dans les exemples de three.js :
+      // « sessionstart » arrête alors la boucle de la fenêtre et seules les
+      // images de la session dessinent.
+      let instance: SessionRA | null = null;
+      renderer.setAnimationLoop((temps, frame) => instance?.image(temps, frame));
       await renderer.xr.setSession(session);
       const espaceVue = await session.requestReferenceSpace('viewer');
       if (typeof session.requestHitTestSource !== 'function') {
@@ -232,7 +236,8 @@ export class SessionRA {
       } catch {
         sourcePlafond = null;
       }
-      return new SessionRA(session, renderer, sourceSol, sourcePlafond, racine, rappels);
+      instance = new SessionRA(session, renderer, sourceSol, sourcePlafond, racine, rappels);
+      return instance;
     } catch (e) {
       liberer(renderer);
       await session.end().catch(() => undefined);
@@ -278,9 +283,10 @@ export class SessionRA {
   // ─── Boucle d'affichage ────────────────────────────────────────────────
 
   private readonly image = (_temps: number, frame?: XRFrame) => {
-    if (this.nettoye) return;
+    // Hors d'une image XR, le framebuffer de la session est inutilisable.
+    if (this.nettoye || !frame) return;
     const espace = this.renderer.xr.getReferenceSpace();
-    if (frame && espace) {
+    if (espace) {
       try {
         this.mettreAJourVisee(frame, espace);
         this.mettreAJourAncres(frame, espace);
