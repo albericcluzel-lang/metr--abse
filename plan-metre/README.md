@@ -24,14 +24,13 @@ Chrome comme une appli classique, fonctionne hors ligne et sert aussi sur PC.
 Les données restent **sur l'appareil**. Pour sauvegarder un chantier ou le passer du téléphone au PC :
 Réglages du chantier → **Exporter** (fichier `.abse.json`, photos comprises), puis **Importer** sur l'autre appareil.
 
-## Mise en ligne (une seule fois)
+## Mise en ligne
 
-L'appli est publiée gratuitement par GitHub Pages à chaque mise à jour de la branche `main`.
+L'appli est publiée gratuitement par GitHub Pages, depuis la branche `gh-pages`, à l'adresse :
+**https://albericcluzel-lang.github.io/metr--abse/**
 
-1. Sur GitHub : **Settings → Pages → Build and deployment → Source : « GitHub Actions »**.
-2. Fusionner la branche de développement dans `main` (ou lancer l'action « Appli Plan & Métré »
-   à la main depuis l'onglet **Actions**).
-3. L'appli est alors disponible à l'adresse : **https://albericcluzel-lang.github.io/metr--abse/**
+Chaque mise à jour de la branche `main` relance les tests puis republie l'appli automatiquement
+(action « Appli Plan & Métré », onglet **Actions** du dépôt). Aucun réglage n'est à faire sur GitHub.
 
 ## Installation
 

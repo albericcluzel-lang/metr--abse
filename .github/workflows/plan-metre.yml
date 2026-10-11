@@ -1,5 +1,5 @@
 # Vérifie l'appli « plan-metre » et la publie sur GitHub Pages
-# (https://<compte>.github.io/metr--abse/) à chaque mise à jour de main.
+# (https://<compte>.github.io/metr--abse/, branche gh-pages) à chaque mise à jour de main.
 name: Appli Plan & Métré
 
 on:
@@ -38,21 +38,30 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npx playwright test
-      - uses: actions/upload-pages-artifact@v3
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        with:
-          path: plan-metre/dist
 
   publier:
     needs: verifier
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deploiement.outputs.page_url }}
+      contents: write
+    defaults:
+      run:
+        working-directory: plan-metre
     steps:
-      - id: deploiement
-        uses: actions/deploy-pages@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: plan-metre/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      # Publication sur la branche gh-pages (servie par GitHub Pages).
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: plan-metre/dist
+          publish_branch: gh-pages
+          enable_jekyll: false
+          commit_message: Publication de l'appli Plan & Métré
