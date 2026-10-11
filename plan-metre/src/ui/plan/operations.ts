@@ -55,23 +55,27 @@ function milieuOuverture(piece: Piece, o: Ouverture): Point {
   return pointSurCote(piece.sommets, o.cote, o.position + o.largeur / 2);
 }
 
-function memePoint(a: Point, b: Point): boolean {
-  return a.x === b.x && a.y === b.y;
+/** Le côté i est-il resté identique ou n'a-t-il été que translaté (ses deux sommets du même vecteur) ? */
+function coteTranslate(avant: readonly Point[], apres: readonly Point[], i: number): boolean {
+  const a0 = avant[i];
+  const a1 = apres[i];
+  const b0 = suivant(avant, i);
+  const b1 = suivant(apres, i);
+  // Tolérance : chaque sommet déplacé est arrondi au centième de cm.
+  return Math.abs(a1.x - a0.x - (b1.x - b0.x)) < 0.05 && Math.abs(a1.y - a0.y - (b1.y - b0.y)) < 0.05;
 }
 
 /**
- * Remplace les sommets d'une pièce (même nombre de sommets) : les ouvertures
- * des côtés modifiés gardent leur place dans le plan (projection de leur
- * milieu sur le nouveau côté), bornées au côté.
+ * Remplace les sommets d'une pièce (même nombre de sommets) : un côté
+ * seulement translaté emporte ses ouvertures (même position) ; sur un côté
+ * déformé, elles gardent leur place dans le plan (projection de leur milieu
+ * sur le nouveau côté), bornées au côté.
  */
 export function avecSommets(avant: Piece, sommets: Sommet[]): Piece {
   const n = sommets.length;
   const ouvertures = avant.ouvertures.map((o) => {
     if (o.cote < 0 || o.cote >= n || n !== avant.sommets.length) return o;
-    const inchange =
-      memePoint(avant.sommets[o.cote], sommets[o.cote]) &&
-      memePoint(suivant(avant.sommets, o.cote), suivant(sommets, o.cote));
-    if (inchange) return o;
+    if (coteTranslate(avant.sommets, sommets, o.cote)) return o;
     const m = milieuOuverture(avant, o);
     const l = longueurCote(sommets, o.cote);
     const position = bornerPosition(abscisseSurCote(sommets, o.cote, m) - o.largeur / 2, o.largeur, l);
@@ -81,19 +85,41 @@ export function avecSommets(avant: Piece, sommets: Sommet[]): Piece {
 }
 
 /**
- * Coupe le côté `cote` en deux par un nouveau sommet (au milieu, ou au
- * projeté de `point` sur le côté). Le nouveau sommet reprend le type de mur
- * du côté coupé. Une ouverture du côté coupé reste sur la moitié qui contient
- * son milieu, avec sa position recalculée.
+ * Abscisse où couper le côté `cote` (au milieu, ou au projeté de `point`).
+ * Une coupe qui tomberait dans une ouverture est reportée sur son tableau le
+ * plus proche, pour ne jamais déplacer ni rogner l'ouverture. null si aucun
+ * point de coupe ne convient (trop près d'un sommet, ou ouverture sur tout
+ * le côté).
  */
-export function insererSommet(piece: Piece, cote: number, point?: Point): Piece {
+export function abscisseDeCoupe(piece: Piece, cote: number, point?: Point): number | null {
   const n = piece.sommets.length;
-  if (cote < 0 || cote >= n) return piece;
-  const a = piece.sommets[cote];
+  if (cote < 0 || cote >= n) return null;
   const l = longueurCote(piece.sommets, cote);
   const t = point ? borner(abscisseSurCote(piece.sommets, cote, point), 0, l) : l / 2;
+  const ouvertures = piece.ouvertures.filter((o) => o.cote === cote);
+  const dansOuverture = (x: number) => ouvertures.some((o) => x > o.position + 1e-6 && x < o.position + o.largeur - 1e-6);
   // Trop près d'un sommet existant : on ne crée pas de côté minuscule.
-  if (t < 1 || t > l - 1) return piece;
+  const valide = (x: number) => x >= 1 && x <= l - 1 && !dansOuverture(x);
+  if (!dansOuverture(t)) return valide(t) ? t : null;
+  const tableaux = ouvertures
+    .flatMap((o) => [o.position, o.position + o.largeur])
+    .filter(valide)
+    .sort((x, y) => Math.abs(x - t) - Math.abs(y - t));
+  return tableaux[0] ?? null;
+}
+
+/**
+ * Coupe le côté `cote` en deux par un nouveau sommet (au milieu, ou au
+ * projeté de `point` sur le côté, reporté hors des ouvertures : cf.
+ * abscisseDeCoupe). Le nouveau sommet reprend le type de mur du côté coupé.
+ * Les ouvertures du côté coupé passent sur la moitié qui les contient, à la
+ * même place dans le plan.
+ */
+export function insererSommet(piece: Piece, cote: number, point?: Point): Piece {
+  const t = abscisseDeCoupe(piece, cote, point);
+  if (t === null) return piece;
+  const a = piece.sommets[cote];
+  const l = longueurCote(piece.sommets, cote);
   const m = pointSurCote(piece.sommets, cote, t);
   const nouveau: Sommet = { x: arrondi(m.x, 0.01), y: arrondi(m.y, 0.01) };
   if (a.typeMurId !== undefined) nouveau.typeMurId = a.typeMurId;
@@ -137,10 +163,18 @@ export function supprimerSommet(piece: Piece, index: number): Piece {
   return { ...piece, sommets, ouvertures };
 }
 
+/** Le côté i part-il dans la direction `u` (prolongement d'un côté coupé en deux) ? */
+function dansLeProlongement(sommets: readonly Point[], i: number, u: Point): boolean {
+  const v = direction(sommets[i], suivant(sommets, i));
+  return Math.abs(u.x * v.y - u.y * v.x) < 1e-3 && u.x * v.x + u.y * v.y > 0;
+}
+
 /**
  * Donne au côté `cote` la longueur `longueur` en déplaçant son sommet de fin
  * le long de la direction du côté. Avec `garderAngles`, le côté suivant est
- * translaté du même vecteur (une pièce rectangulaire reste rectangulaire).
+ * translaté du même vecteur (une pièce rectangulaire reste rectangulaire) ;
+ * s'il est dans le prolongement (côté coupé en deux), seul le sommet de
+ * coupe glisse le long du mur, tant qu'il ne dépasse pas le sommet suivant.
  */
 export function changerLongueurCote(piece: Piece, cote: number, longueur: number, garderAngles = true): Piece {
   const n = piece.sommets.length;
@@ -153,9 +187,15 @@ export function changerLongueurCote(piece: Piece, cote: number, longueur: number
   const u = direction(a, b);
   const d = { x: u.x * (longueur - l), y: u.y * (longueur - l) };
   const deplaces = new Set([iFin]);
-  if (garderAngles) {
-    const iSuivant = (cote + 2) % n;
-    if (iSuivant !== cote) deplaces.add(iSuivant);
+  const glisse = dansLeProlongement(piece.sommets, iFin, u) && longueur - l < longueurCote(piece.sommets, iFin) - 1;
+  if (garderAngles && !glisse) {
+    // On translate le premier côté suivant qui n'est pas dans le prolongement.
+    let j = iFin;
+    while (dansLeProlongement(piece.sommets, j, u) && (j + 1) % n !== cote) {
+      j = (j + 1) % n;
+      deplaces.add(j);
+    }
+    if ((j + 1) % n !== cote) deplaces.add((j + 1) % n);
   }
   const sommets = piece.sommets.map((s, i) =>
     deplaces.has(i) ? { ...s, x: arrondi(s.x + d.x, 0.01), y: arrondi(s.y + d.y, 0.01) } : { ...s },

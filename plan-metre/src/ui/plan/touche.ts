@@ -3,7 +3,15 @@
 // écran (px) avec l'échelle de la vue.
 
 import { epaisseurCote, segmentOuverture } from '../../geometrie/piece';
-import { contientPoint, distance, longueurCote, normaleExterieure, suivant, tourner } from '../../geometrie/polygone';
+import {
+  boiteEnglobante,
+  contientPoint,
+  distance,
+  longueurCote,
+  normaleExterieure,
+  suivant,
+  tourner,
+} from '../../geometrie/polygone';
 import type { Catalogue, ID, Piece, Plan, Point } from '../../model/types';
 
 /** Pièce dont l'intérieur contient `p` (la dernière dessinée, donc celle du dessus). */
@@ -133,6 +141,19 @@ export function sommetProche(sommets: readonly Point[], p: Point, tol: number): 
     }
   });
   return meilleur;
+}
+
+/**
+ * Sommet de la pièce sous le point, à moins de `rayon` cm. À l'intérieur de
+ * la pièce, il faut en plus être à moins du quart de sa plus petite
+ * dimension : dans une pièce petite à l'écran, un doigt posé dedans la
+ * déplace au lieu d'attraper un sommet (qui reste accessible depuis le mur).
+ */
+export function sommetSousPoint(sommets: readonly Point[], p: Point, rayon: number): number {
+  const i = sommetProche(sommets, p, rayon);
+  if (i < 0 || !contientPoint(sommets, p)) return i;
+  const b = boiteEnglobante(sommets);
+  return distance(sommets[i], p) <= Math.min(b.maxX - b.minX, b.maxY - b.minY) / 4 ? i : -1;
 }
 
 /** Écart (px écran) entre la face extérieure du mur et le centre de la poignée « + ». */

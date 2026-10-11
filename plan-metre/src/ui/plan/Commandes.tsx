@@ -1,8 +1,8 @@
 // Commandes flottantes de l'éditeur : palette d'outils (colonne à gauche),
 // bandeaux d'aide et de choix du type, barre du tracé, état vide.
 
-import type { ReactNode } from 'react';
-import { Bouton, BoutonIcone } from '../commun/composants';
+import { memo, useState, type ReactNode } from 'react';
+import { Bouton, BoutonIcone, FeuilleBas } from '../commun/composants';
 import { Icone, type NomIcone } from '../commun/Icone';
 
 export type Outil = 'selection' | 'dessin' | 'ouverture' | 'equipement' | 'photo';
@@ -15,7 +15,7 @@ const OUTILS: { id: Outil; icone: NomIcone; libelle: string }[] = [
   { id: 'photo', icone: 'photo', libelle: 'Placer une photo' },
 ];
 
-export function Palette({
+export const Palette = memo(function Palette({
   outil,
   onOutil,
   onZoomAvant,
@@ -49,35 +49,78 @@ export function Palette({
       </div>
     </div>
   );
+});
+
+export interface ChoixType<T extends string> {
+  libelle: string;
+  valeur: T;
+  options: readonly { valeur: T; libelle: string }[];
+  onChange: (v: T) => void;
 }
 
-/** Bandeau en haut du plan : aide de l'outil et, s'il y a lieu, choix du type. */
-export function Bandeau<T extends string>({
-  aide,
-  choix,
-}: {
-  aide: ReactNode;
-  choix?: { libelle: string; valeur: T; options: readonly { valeur: T; libelle: string }[]; onChange: (v: T) => void };
-}) {
-  return (
-    <div className="plan2d-bandeau" role={choix ? undefined : 'status'}>
-      <p className="plan2d-bandeau-aide">{aide}</p>
-      {choix && (
-        <div className="plan2d-puces" role="group" aria-label={choix.libelle}>
-          {choix.options.map((o) => (
-            <button
-              key={o.valeur}
-              type="button"
-              className="plan2d-puce"
-              aria-pressed={o.valeur === choix.valeur}
-              onClick={() => choix.onChange(o.valeur)}
-            >
-              {o.libelle}
-            </button>
-          ))}
-        </div>
-      )}
+/**
+ * Bandeau en haut du plan : aide de l'outil et, s'il y a lieu, choix du type.
+ * Grand écran : les types en puces à côté de l'aide. Téléphone : le bandeau
+ * est trop étroit pour les montrer tous ; une feuille les présente en grille
+ * dès l'arrivée de l'outil, puis la puce du type choisi permet d'en changer.
+ */
+export function Bandeau<T extends string>({ aide, choix, large }: { aide: ReactNode; choix?: ChoixType<T>; large?: boolean }) {
+  const [feuille, setFeuille] = useState(!large && !!choix);
+  if (!choix) {
+    return (
+      <div className="plan2d-bandeau" role="status">
+        <p className="plan2d-bandeau-aide">{aide}</p>
+      </div>
+    );
+  }
+  const puces = (
+    <div className={large ? 'plan2d-puces' : 'plan2d-grille-types'} role="group" aria-label={choix.libelle}>
+      {choix.options.map((o) => (
+        <button
+          key={o.valeur}
+          type="button"
+          className="plan2d-puce"
+          aria-pressed={o.valeur === choix.valeur}
+          onClick={() => {
+            choix.onChange(o.valeur);
+            setFeuille(false);
+          }}
+        >
+          {o.libelle}
+        </button>
+      ))}
     </div>
+  );
+  if (large) {
+    return (
+      <div className="plan2d-bandeau">
+        <p className="plan2d-bandeau-aide">{aide}</p>
+        {puces}
+      </div>
+    );
+  }
+  const courant = choix.options.find((o) => o.valeur === choix.valeur);
+  return (
+    <>
+      <div className="plan2d-bandeau">
+        <p className="plan2d-bandeau-aide">{aide}</p>
+        <button
+          type="button"
+          className="plan2d-puce plan2d-puce-type"
+          aria-haspopup="dialog"
+          aria-label={`${choix.libelle} : ${courant?.libelle ?? ''}, changer`}
+          onClick={() => setFeuille(true)}
+        >
+          <span className="plan2d-puce-type-nom">{courant?.libelle}</span>
+          <span className="plan2d-puce-type-changer">
+            Changer <Icone nom="bas" taille={16} />
+          </span>
+        </button>
+      </div>
+      <FeuilleBas ouverte={feuille} titre={choix.libelle} onFermer={() => setFeuille(false)}>
+        {puces}
+      </FeuilleBas>
+    </>
   );
 }
 

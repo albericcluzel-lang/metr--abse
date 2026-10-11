@@ -349,20 +349,51 @@
   scrollbar-width: thin;
 }
 
-/* Téléphone : un fondu à droite signale que la liste défile. */
-@media (max-width: 899px) {
-  .plan2d-puces {
-    mask-image: linear-gradient(to right, #000 82%, transparent);
-    padding-right: 36px;
-  }
+/* Téléphone : le type choisi, qui ouvre la feuille de tous les types. */
+.plan2d-puce-type {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin-top: 6px;
 }
 
-/* Grand écran : aide et choix du type sur une seule ligne. */
+.plan2d-puce-type-nom {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan2d-puce-type-changer {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--primaire);
+}
+
+.plan2d-grille-types {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.plan2d-grille-types .plan2d-puce {
+  justify-content: center;
+  min-height: 48px;
+  padding: 0 10px;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.2;
+}
+
+/* Grand écran : l'aide, puis tous les types à côté (sur plusieurs lignes s'il le faut). */
 @media (min-width: 900px) {
   .plan2d-bandeau {
     display: flex;
     align-items: center;
     gap: 12px;
+    max-width: 1080px;
     padding: 6px 8px 6px 14px;
   }
 
@@ -373,9 +404,11 @@
 
   .plan2d-puces {
     flex: 1;
+    flex-wrap: wrap;
     min-width: 0;
     margin: 0;
     padding: 0;
+    overflow: visible;
   }
 }
 
@@ -474,9 +507,21 @@
 
 /* ─── Panneau de propriétés ───────────────────────────────────────────── */
 
-/* Sur téléphone (feuille du bas sans voile) : on laisse le plan visible. */
+/*
+ * Sur téléphone (feuille du bas sans voile) : on laisse le plan visible, et
+ * la feuille s'arrête au-dessus de la barre du bas (Photos, +, Métré), qui
+ * reste utilisable tant qu'un élément est sélectionné. Le bouton « + » de la
+ * barre déborde sur la feuille : le corps garde de la place pour lui.
+ */
 .feuille:has(.plan2d-proprietes) {
   max-height: min(42dvh, 400px);
+  bottom: calc(var(--hauteur-nav) + var(--zone-sure-bas));
+  padding-bottom: 0;
+  z-index: 19;
+}
+
+.feuille:has(.plan2d-proprietes) .feuille-corps {
+  padding-bottom: 30px;
 }
 
 .plan2d-panneau {
@@ -538,9 +583,14 @@
 
 .plan2d-rotation {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  /* minmax(0, …) : le champ rétrécit au lieu de pousser « +90° » hors du panneau. */
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
+}
+
+.plan2d-rotation .champ {
+  min-width: 0;
 }
 
 .plan2d-rotation .bouton {

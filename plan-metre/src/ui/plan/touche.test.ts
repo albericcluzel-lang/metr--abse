@@ -10,6 +10,7 @@ import {
   poigneeProche,
   poigneesMilieux,
   sommetProche,
+  sommetSousPoint,
 } from './touche';
 
 const catalogue = catalogueParDefaut();
@@ -80,5 +81,15 @@ describe('tests de touche', () => {
     expect(poigneeProche(poignees, { x: 200, y: 2 }, 18)).toBe(-1);
     // Côtés trop courts à l'écran : pas de poignée.
     expect(poigneesMilieux(piece, catalogue, (p) => p, 0.3, 150).every((q) => q === null)).toBe(true);
+  });
+
+  it('n’attrape pas un sommet depuis le milieu d’une pièce petite à l’écran', () => {
+    // Cuisine de 350 × 280 à 0,23 px/cm : rayon de 26 px ≈ 113 cm.
+    const cuisine = pieceRectangle('Cuisine', 350, 280).sommets;
+    expect(sommetSousPoint(cuisine, { x: 87, y: 210 }, 113)).toBe(-1); // à 111 cm du coin, dedans
+    expect(sommetSousPoint(cuisine, { x: 40, y: 250 }, 113)).toBe(3); // près du coin
+    expect(sommetSousPoint(cuisine, { x: -60, y: 340 }, 113)).toBe(3); // dehors, dans le mur
+    // Grande pièce : le rayon s'applique aussi à l'intérieur.
+    expect(sommetSousPoint(pieceRectangle('Séjour', 1000, 800).sommets, { x: 87, y: 730 }, 113)).toBe(3);
   });
 });

@@ -3,8 +3,9 @@
 // propriétés de la sélection.
 //
 // Gestes : un doigt (ou la souris) sur le vide déplace la vue, deux doigts
-// zooment autour de leur milieu, la molette zoome sous le curseur. Chaque
-// glisser d'un objet ne fait qu'une étape d'annulation (clé unique par geste).
+// zooment autour de leur milieu, la molette zoome sous le curseur. Pendant le
+// glisser d'un objet, la pièce modifiée n'est qu'un aperçu local (seule elle
+// est redessinée) ; elle est enregistrée au lâcher, en une étape d'annulation.
 
 import {
   useCallback,
@@ -37,6 +38,7 @@ import {
   EPINGLE_TOUCHE_PX,
   Grille,
   pieceActive,
+  pixelTrait,
   TOUCHE_MILIEU_PX,
   TOUCHE_MILIEU_TACTILE_PX,
   TOUCHE_SOMMET_PX,
@@ -63,7 +65,7 @@ import {
   pieceSousPoint,
   poigneeProche,
   poigneesMilieux,
-  sommetProche,
+  sommetSousPoint,
 } from './touche';
 import { ajusterVue, boitePlan, pincer, versEcran, versPlan, zoomer, type Marges, type Vue } from './vue';
 import './plan2d.css';
@@ -71,10 +73,11 @@ import './plan2d.css';
 /**
  * Zones occupées par les commandes flottantes, laissées libres par « Ajuster
  * la vue » (px). Sur grand écran, le plan est souvent limité par la hauteur :
- * on réserve aussi la place du bandeau des outils.
+ * on réserve aussi la place du bandeau des outils (deux lignes de types
+ * d'équipements).
  */
 const MARGES_VUE: Marges = { haut: 24, droite: 66, bas: 80, gauche: 74 };
-const MARGES_VUE_LARGE: Marges = { ...MARGES_VUE, haut: 80 };
+const MARGES_VUE_LARGE: Marges = { ...MARGES_VUE, haut: 124 };
 /** Déplacement (px) au-delà duquel un appui devient un glisser. */
 const SEUIL_GLISSER_SOURIS = 4;
 const SEUIL_GLISSER_TACTILE = 8;
@@ -164,6 +167,13 @@ export function EditeurPlan2D() {
   const tailleRef = useRef(taille);
   const [vue, setVue] = useState<Vue>({ echelle: 1, tx: 0, ty: 0 });
   const vueRef = useRef(vue);
+  /**
+   * Vue au début d'un déplacement de la vue (glisser ou pincer) : jusqu'à la
+   * fin du geste, les pièces, textes et poignées restent dessinés pour cette
+   * vue, et seule une transformation les ajuste à la vue courante.
+   */
+  const [vueGeste, setVueGeste] = useState<Vue | null>(null);
+  const vueGesteRef = useRef(vueGeste);
   const [outil, setOutil] = useState<Outil>('selection');
   const [typeOuverture, setTypeOuverture] = useState<TypeOuverture>('porte');
   const [typeEquipement, setTypeEquipement] = useState<TypeEquipement>('baignoire');
@@ -171,6 +181,9 @@ export function EditeurPlan2D() {
   const traceRef = useRef(trace);
   const [curseur, setCurseur] = useState<Aimant | null>(null);
   const [formulaire, setFormulaire] = useState(false);
+  /** Pièce en cours de glisser, pas encore enregistrée dans le plan. */
+  const [apercu, setApercu] = useState<Piece | null>(null);
+  const apercuRef = useRef(apercu);
 
   const geste = useRef<Geste | null>(null);
   const pince = useRef<Pince | null>(null);
@@ -192,6 +205,30 @@ export function EditeurPlan2D() {
     setTrace(t);
   }, []);
 
+  const figerVue = useCallback((v: Vue | null) => {
+    if (vueGesteRef.current === v || (v && vueGesteRef.current)) return;
+    vueGesteRef.current = v;
+    setVueGeste(v);
+  }, []);
+
+  const definirApercu = useCallback((p: Piece | null) => {
+    apercuRef.current = p;
+    setApercu(p);
+  }, []);
+
+  /** Pièce telle qu'affichée : l'aperçu du glisser en cours, sinon celle du plan. */
+  function pieceCourante(id: ID): Piece | null {
+    return apercuRef.current?.id === id ? apercuRef.current : pieceDuPlan(id);
+  }
+
+  /** Enregistre l'aperçu du glisser (fin du geste, ou geste interrompu par un second doigt). */
+  function validerApercu(cle: string) {
+    const p = apercuRef.current;
+    if (!p) return;
+    definirApercu(null);
+    modifierPiece(p.id, () => p, { cle });
+  }
+
   const changerOutil = useCallback(
     (o: Outil) => {
       setOutil(o);
@@ -202,6 +239,20 @@ export function EditeurPlan2D() {
     },
     [definirTrace],
   );
+
+  // Les pièces non modifiées gardent leur identité : leurs calques ne sont pas redessinés.
+  const planAffiche = useMemo(
+    () => (plan && apercu ? { ...plan, pieces: plan.pieces.map((p) => (p.id === apercu.id ? apercu : p)) } : plan),
+    [plan, apercu],
+  );
+  // Pendant un glisser, la pièce déplacée est dessinée sur une couche à part,
+  // au-dessus des autres, qui ne changent pas d'une image à l'autre.
+  const idApercu = apercu?.id ?? null;
+  const planFixe = useMemo(
+    () => (plan && idApercu ? { ...plan, pieces: plan.pieces.filter((p) => p.id !== idApercu) } : plan),
+    [plan, idApercu],
+  );
+  const planMobile = useMemo(() => (apercu ? { pieces: [apercu] } : null), [apercu]);
 
   const photosNiveau = useMemo(
     () => photos.filter((ph) => ph.position && ph.niveauId === niveau?.id),
@@ -246,12 +297,11 @@ export function EditeurPlan2D() {
     ajuster();
   }, [taille, niveau, ajuster]);
 
-  // Changement de niveau ou de variante : le tracé en cours est abandonné.
+  // Changement de niveau ou de variante : le tracé en cours est abandonné et
+  // l'outil revient à la Sélection (un niveau vide propose alors relevé et dessin).
   useEffect(() => {
-    definirTrace([]);
-    setCurseur(null);
-    setFormulaire(false);
-  }, [niveau?.id, variante, definirTrace]);
+    changerOutil('selection');
+  }, [niveau?.id, variante, changerOutil]);
 
   useEffect(() => {
     const svg = svgRef.current;
@@ -269,7 +319,8 @@ export function EditeurPlan2D() {
   }, [definirVue]);
 
   // Sur téléphone, la feuille de propriétés couvre le bas de l'écran : si la
-  // sélection passe dessous, on remonte le plan pour la garder visible.
+  // sélection passe dessous, on remonte le plan pour la garder visible. Aussi
+  // quand le plan rétrécit (clavier ouvert pour saisir un champ de la feuille).
   useEffect(() => {
     if (large || !selection || outil !== 'selection') return;
     const id = requestAnimationFrame(() => {
@@ -289,13 +340,18 @@ export function EditeurPlan2D() {
       definirVue({ ...v, ty: v.ty - (s.y - Math.max(70, limite * 0.5)) });
     });
     return () => cancelAnimationFrame(id);
-  }, [selection, large, outil, definirVue]);
+  }, [selection, large, outil, taille, definirVue]);
 
-  const zoomerAuCentre = (facteur: number) => {
-    const t = tailleRef.current;
-    if (!t) return;
-    definirVue(zoomer(vueRef.current, facteur, { x: t.largeur / 2, y: t.hauteur / 2 }));
-  };
+  const zoomerAuCentre = useCallback(
+    (facteur: number) => {
+      const t = tailleRef.current;
+      if (!t) return;
+      definirVue(zoomer(vueRef.current, facteur, { x: t.largeur / 2, y: t.hauteur / 2 }));
+    },
+    [definirVue],
+  );
+  const zoomAvant = useCallback(() => zoomerAuCentre(FACTEUR_ZOOM), [zoomerAuCentre]);
+  const zoomArriere = useCallback(() => zoomerAuCentre(1 / FACTEUR_ZOOM), [zoomerAuCentre]);
 
   // ─── Outils de dessin ─────────────────────────────────────────────────
 
@@ -442,7 +498,7 @@ export function EditeurPlan2D() {
     const idActif = pieceActive(e.selection);
     const active = idActif ? pl.pieces.find((p) => p.id === idActif) : undefined;
     if (active) {
-      const i = sommetProche(active.sommets, pp, TOUCHE_SOMMET_PX * k * (tactile ? 1.2 : 1));
+      const i = sommetSousPoint(active.sommets, pp, TOUCHE_SOMMET_PX * k * (tactile ? 1.2 : 1));
       if (i >= 0) return { type: 'sommet', pieceId: active.id, index: i };
       const milieux = poigneesMilieux(active, cat, (q) => versEcran(v, q), v.echelle, COTE_MIN_MILIEU_PX);
       const j = poigneeProche(milieux, pE, tactile ? TOUCHE_MILIEU_TACTILE_PX : TOUCHE_MILIEU_PX);
@@ -521,6 +577,7 @@ export function EditeurPlan2D() {
     const focus = document.activeElement;
     if (focus instanceof HTMLElement && focus !== document.body) focus.blur();
     const pE = pointEcran(e);
+    if (geste.current) validerApercu(geste.current.cle);
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
     } catch {
@@ -536,7 +593,9 @@ export function EditeurPlan2D() {
     if (pointeurs.current.size === 2) {
       // Second doigt : on abandonne le geste en cours (aucun point de tracé posé) et on pince.
       const ids = [...pointeurs.current.keys()] as [number, number];
+      if (geste.current) validerApercu(geste.current.cle);
       geste.current = null;
+      figerVue(vueRef.current);
       pince.current = { ids, a0: pointeurs.current.get(ids[0])!, b0: pointeurs.current.get(ids[1])!, vueDepart: vueRef.current };
       if (courant.current.outil === 'dessin') setCurseur(null);
       return;
@@ -578,6 +637,7 @@ export function EditeurPlan2D() {
     const gl = g.glisser;
     switch (gl.mode) {
       case 'vue':
+        figerVue(gl.vueDepart);
         definirVue({ ...gl.vueDepart, tx: gl.vueDepart.tx + pE.x - g.departEcran.x, ty: gl.vueDepart.ty + pE.y - g.departEcran.y });
         return;
       case 'trace':
@@ -595,10 +655,10 @@ export function EditeurPlan2D() {
       }
       case 'sommet': {
         const a = aimanterSommet(pp, gl.pieceDepart.sommets, gl.index, gl.cibles, AIMANT_PX / v.echelle);
-        const actuelle = pieceDuPlan(gl.pieceId);
+        const actuelle = pieceCourante(gl.pieceId);
         const s = actuelle?.sommets[gl.index];
         const dejaLa = s && actuelle.sommets.length === gl.pieceDepart.sommets.length && s.x === a.point.x && s.y === a.point.y;
-        if (!dejaLa) modifierPiece(gl.pieceId, () => deplacerSommet(gl.pieceDepart, gl.index, a.point), { cle: g.cle });
+        if (!dejaLa) definirApercu(deplacerSommet(gl.pieceDepart, gl.index, a.point));
         const sel = useEtat.getState().selection;
         if (!(sel?.type === 'sommet' && sel.pieceId === gl.pieceId && sel.index === gl.index)) {
           etat.selectionner({ type: 'sommet', pieceId: gl.pieceId, index: gl.index });
@@ -612,26 +672,19 @@ export function EditeurPlan2D() {
         const dy = Math.round(pp.y - g.departPlan.y);
         const c = aimanterMurAMur(deplacerPiece(gl.pieceDepart, dx, dy), gl.autres, cat);
         const finale = deplacerPiece(gl.pieceDepart, dx + c.x, dy + c.y);
-        const actuelle = pieceDuPlan(gl.pieceId);
+        const actuelle = pieceCourante(gl.pieceId);
         if (actuelle && actuelle.sommets[0].x === finale.sommets[0].x && actuelle.sommets[0].y === finale.sommets[0].y) return;
-        modifierPiece(gl.pieceId, () => finale, { cle: g.cle });
+        definirApercu(finale);
         return;
       }
       case 'ouverture': {
-        const piece = pieceDuPlan(gl.pieceId);
+        const piece = pieceCourante(gl.pieceId);
         const o = piece?.ouvertures.find((x) => x.id === gl.ouvertureId);
         if (!piece || !o) return;
         const l = longueurCote(piece.sommets, o.cote);
         const position = bornerPosition(Math.round(abscisseSurCote(piece.sommets, o.cote, pp) - gl.decalage), o.largeur, l);
         if (position !== o.position) {
-          modifierPiece(
-            gl.pieceId,
-            (p) => {
-              const x = p.ouvertures.find((y) => y.id === gl.ouvertureId);
-              if (x) x.position = position;
-            },
-            { cle: g.cle },
-          );
+          definirApercu({ ...piece, ouvertures: piece.ouvertures.map((x) => (x.id === o.id ? { ...x, position } : x)) });
         }
         const sel = useEtat.getState().selection;
         if (!(sel?.type === 'ouverture' && sel.ouvertureId === gl.ouvertureId)) {
@@ -642,19 +695,10 @@ export function EditeurPlan2D() {
       case 'equipement': {
         const x = Math.round(gl.centreDepart.x + pp.x - g.departPlan.x);
         const y = Math.round(gl.centreDepart.y + pp.y - g.departPlan.y);
-        const eq = pieceDuPlan(gl.pieceId)?.equipements.find((q) => q.id === gl.equipementId);
-        if (eq && (eq.x !== x || eq.y !== y)) {
-          modifierPiece(
-            gl.pieceId,
-            (p) => {
-              const q = p.equipements.find((z) => z.id === gl.equipementId);
-              if (q) {
-                q.x = x;
-                q.y = y;
-              }
-            },
-            { cle: g.cle },
-          );
+        const piece = pieceCourante(gl.pieceId);
+        const eq = piece?.equipements.find((q) => q.id === gl.equipementId);
+        if (piece && eq && (eq.x !== x || eq.y !== y)) {
+          definirApercu({ ...piece, equipements: piece.equipements.map((q) => (q.id === eq.id ? { ...q, x, y } : q)) });
         }
         const sel = useEtat.getState().selection;
         if (!(sel?.type === 'equipement' && sel.equipementId === gl.equipementId)) {
@@ -764,6 +808,8 @@ export function EditeurPlan2D() {
 
   function surPointerUp(e: EvenementPointeur<SVGSVGElement>, annule = false) {
     pointeurs.current.delete(e.pointerId);
+    // Plus aucun doigt : pièces et textes sont redessinés pour la vue finale.
+    if (pointeurs.current.size === 0) figerVue(null);
     const pc = pince.current;
     if (pc) {
       if (pc.ids.includes(e.pointerId)) {
@@ -790,6 +836,7 @@ export function EditeurPlan2D() {
     const g = geste.current;
     if (!g || e.pointerId !== g.pointerId) return;
     geste.current = null;
+    validerApercu(g.cle);
     if (annule) {
       if (g.glisser.mode === 'trace') setCurseur(null);
       return;
@@ -811,7 +858,7 @@ export function EditeurPlan2D() {
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (formulaire || document.querySelector('.dialogue')) return;
+    if (formulaire || document.querySelector('.dialogue, .feuille[aria-modal="true"]')) return;
     const etat = useEtat.getState();
     if (e.key === 'Escape') {
       if (outil === 'dessin' && traceRef.current.length > 0) {
@@ -843,8 +890,14 @@ export function EditeurPlan2D() {
   // ─── Rendu ───────────────────────────────────────────────────────────
 
   const idActif = outil === 'selection' ? pieceActive(selection) : null;
-  const pieceSelectionnee = idActif ? plan?.pieces.find((p) => p.id === idActif) : undefined;
+  const pieceSelectionnee = idActif ? planAffiche?.pieces.find((p) => p.id === idActif) : undefined;
   const planVide = !!plan && plan.pieces.length === 0;
+  // Pendant un déplacement de la vue : calques dessinés pour la vue du début du geste.
+  const vueCalques = vueGeste ?? vue;
+  const k = vue.echelle / vueCalques.echelle;
+  const ajustement = vueGeste
+    ? `translate(${vue.tx - k * vueGeste.tx} ${vue.ty - k * vueGeste.ty}) scale(${k})`
+    : undefined;
 
   return (
     <div className="plan2d" ref={racineRef}>
@@ -867,24 +920,41 @@ export function EditeurPlan2D() {
         onContextMenu={(e) => e.preventDefault()}
       >
         {taille && <Grille vue={vue} largeur={taille.largeur} hauteur={taille.hauteur} />}
-        {plan && catalogue && (
+        {planAffiche && catalogue && (
           <g transform={`translate(${vue.tx} ${vue.ty}) scale(${vue.echelle})`}>
-            <CalquePlan plan={plan} catalogue={catalogue} selection={outil === 'selection' ? selection : null} echelle={vue.echelle} />
+            {planFixe && (
+              <CalquePlan
+                plan={planFixe}
+                catalogue={catalogue}
+                selection={outil === 'selection' ? selection : null}
+                px={pixelTrait(vueCalques.echelle)}
+              />
+            )}
+            {planMobile && (
+              <CalquePlan
+                plan={planMobile}
+                catalogue={catalogue}
+                selection={outil === 'selection' ? selection : null}
+                px={pixelTrait(vueCalques.echelle)}
+              />
+            )}
           </g>
         )}
-        {plan && <CalqueTextes plan={plan} vue={vue} selection={outil === 'selection' ? selection : null} />}
-        {photosNiveau.length > 0 && <CalquePhotos photos={photosNiveau} vue={vue} selection={selection} />}
-        {pieceSelectionnee && catalogue && (
-          <CalquePoignees piece={pieceSelectionnee} catalogue={catalogue} vue={vue} selection={selection} />
-        )}
+        <g transform={ajustement}>
+          {planAffiche && <CalqueTextes plan={planAffiche} vue={vueCalques} selection={outil === 'selection' ? selection : null} />}
+          {photosNiveau.length > 0 && <CalquePhotos photos={photosNiveau} vue={vueCalques} selection={selection} />}
+          {pieceSelectionnee && catalogue && (
+            <CalquePoignees piece={pieceSelectionnee} catalogue={catalogue} vue={vueCalques} selection={selection} />
+          )}
+        </g>
         {outil === 'dessin' && <CalqueTrace trace={trace} curseur={formulaire ? null : curseur} vue={vue} />}
       </svg>
 
       <Palette
         outil={outil}
         onOutil={changerOutil}
-        onZoomAvant={() => zoomerAuCentre(FACTEUR_ZOOM)}
-        onZoomArriere={() => zoomerAuCentre(1 / FACTEUR_ZOOM)}
+        onZoomAvant={zoomAvant}
+        onZoomArriere={zoomArriere}
         onAjuster={ajuster}
       />
 
@@ -913,6 +983,7 @@ export function EditeurPlan2D() {
               <strong>Touchez un mur</strong> pour y poser :
             </>
           }
+          large={large}
           choix={{
             libelle: 'Type d’ouverture',
             valeur: typeOuverture,
@@ -928,6 +999,7 @@ export function EditeurPlan2D() {
               <strong>Touchez une pièce</strong> pour y poser :
             </>
           }
+          large={large}
           choix={{
             libelle: 'Type d’équipement',
             valeur: typeEquipement,
