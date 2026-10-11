@@ -358,7 +358,7 @@ test('réalité augmentée (session simulée) : chaque zone terminée est proté
   ]);
   await expect(page.getByText('Zone 1 terminée')).toBeVisible();
   // Toujours en session : la zone est déjà dans le brouillon…
-  expect((await lireBrouillon(page, id))?.zones).toHaveLength(1);
+  await expect.poll(async () => (await lireBrouillon(page, id))?.zones?.length).toBe(1);
   // … et y suit les corrections du suivi (angle 2 déplacé de 20 cm).
   await page.evaluate(() => (window as any).__ra.ajuster([{ id: 2, point: { x: 4.2, y: -1.4, z: 0 } }]));
   await expect.poll(async () => (await lireBrouillon(page, id))?.zones.map((z) => z.points[1].x)).toEqual([420]);
@@ -405,6 +405,7 @@ test('réalité augmentée (session simulée) : après une rupture du repère, l
     [20, 22],
   ]);
   await expect(page.getByText('Zone 2 terminée')).toBeVisible();
+  await expect.poll(async () => (await lireBrouillon(page, id))?.zones?.length).toBe(2);
   const brouillon = await lireBrouillon(page, id);
   expect(brouillon?.zones).toHaveLength(2);
   expect(brouillon!.zones[0].sessionRA).not.toBe(brouillon!.zones[1].sessionRA);
@@ -472,7 +473,7 @@ test('retour du téléphone dans le relevé : remonte d’une étape et demande 
   await dialogue.getByRole('button', { name: 'Abandonner' }).click();
   await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
   await expect(page.getByRole('button', { name: 'Ajouter une pièce' })).toBeVisible();
-  expect(await lireBrouillon(page, id)).toBeNull();
+  await expect.poll(() => lireBrouillon(page, id)).toBeNull();
 
   // Choix de la méthode sans zone : le retour ramène simplement au plan.
   await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
