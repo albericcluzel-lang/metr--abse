@@ -10,7 +10,7 @@ from . import etapes, prompts
 from .config import VIDEO_MODELS, ConfigError, FatalError, Settings, check_video_seconds
 from .etapes import Job
 from .gemini import GeminiProvider
-from .projet import MAX_REFERENCES, Project
+from .projet import Project
 from .service import FalProvider, Provider, ServiceError
 
 
@@ -87,7 +87,7 @@ def run_jobs(settings: Settings, jobs: list[Job], args: argparse.Namespace, prov
              extra: int = 0, video: bool = False) -> int:
     """Simulation (liste de ce qui serait payé) ou lancement réel avec --apply.
 
-    `extra` : demandes payantes annoncées en plus des travaux (storyboard à écrire).
+    `extra` : demandes annoncées en plus des travaux (storyboard à écrire).
     `video` : travaux à confier au fournisseur des vidéos (fal.ai).
     """
     todo = etapes.pending(jobs, args.refaire)
@@ -100,7 +100,7 @@ def run_jobs(settings: Settings, jobs: list[Job], args: argparse.Namespace, prov
     if not args.apply:
         for job in todo:
             print(f"[à faire] {job.label}")
-        print(f"Simulation : {len(todo) + extra} demande(s) payante(s) seraient envoyée(s) à "
+        print(f"Simulation : {len(todo) + extra} demande(s) seraient envoyée(s) à "
               f"{provider_label(settings, video)}. Ajoutez --apply pour lancer.")
         return 0
     own = provider is None
@@ -149,8 +149,9 @@ def cmd_essais(settings: Settings, args: argparse.Namespace) -> int:
     else:
         names = ", ".join(path.name for path in captures) or "aucune"
         raise ConfigError(f"Précisez la vue avec --capture (captures du projet : {names}).")
-    warn_references(project)
-    code = run_jobs(settings, etapes.essais_jobs(project, capture, args.nombre, args.personnages), args)
+    warn_references(project, settings, master=False)
+    code = run_jobs(settings, etapes.essais_jobs(project, capture, args.nombre, args.personnages,
+                                                 settings.image_limits[0]), args)
     if args.apply and code == 0:
         print(f"Choisissez la meilleure proposition dans {project.output / 'essais'}, puis :\n"
               f"  python -m rendu_ia maitre \"{project.root}\" <image choisie>")
@@ -175,8 +176,9 @@ def cmd_rendus(settings: Settings, args: argparse.Namespace) -> int:
     if project.master() is None:
         print("Attention : pas d'image maître, les vues risquent de ne pas se ressembler. "
               "Conseil : lancer d'abord « essais » puis « maitre ».")
-    warn_references(project)
-    code = run_jobs(settings, etapes.rendus_jobs(project, captures, args.variantes, args.personnages), args)
+    warn_references(project, settings, master=project.master() is not None)
+    code = run_jobs(settings, etapes.rendus_jobs(project, captures, args.variantes, args.personnages,
+                                                 settings.image_limits[0]), args)
     if args.apply and code == 0:
         print(f"Ensuite : python -m rendu_ia storyboard \"{project.root}\"")
     return code
@@ -230,6 +232,10 @@ def cmd_upscale(settings: Settings, args: argparse.Namespace) -> int:
     if not sources:
         raise ConfigError("Aucune image à agrandir : lancez d'abord « rendus » ou « storyboard ».")
     if settings.provider == "gemini":
+        if settings.image_limits[1] != "4K":
+            raise ConfigError(f"Le modèle {settings.gemini_image_model} ne sort pas en 4K : il ne peut pas "
+                              "agrandir les images. Utilisez un logiciel d'agrandissement gratuit sur votre PC "
+                              "(voir le README), ou un modèle payant (RENDU_GEMINI_MODELE_IMAGE).")
         print("Avec Gemini, l'upscale régénère chaque image en 4K : vérifiez qu'aucun détail n'a changé.")
     code = run_jobs(settings, etapes.upscale_jobs(project, sources), args)
     if args.apply and code == 0:
@@ -258,10 +264,14 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
     return code
 
 
-def warn_references(project: Project) -> None:
-    count = len(project.references())
-    if count > MAX_REFERENCES:
-        print(f"Attention : {count} références, seules les {MAX_REFERENCES} premières (ordre alphabétique) sont envoyées.")
+def warn_references(project: Project, settings: Settings, master: bool) -> None:
+    references = project.references()
+    room = etapes.reference_room(settings.image_limits[0], master)
+    if len(references) > room:
+        kept = ", ".join(path.name for path in references[:room]) or "aucune"
+        alongside = "la capture et l'image maître" if master else "la capture"
+        print(f"Attention : {len(references)} références, mais ce modèle n'en accepte que {room} avec "
+              f"{alongside}. Envoyées (ordre alphabétique) : {kept}.")
 
 
 COMMANDS = {"nouveau": cmd_nouveau, "essais": cmd_essais, "maitre": cmd_maitre, "rendus": cmd_rendus,

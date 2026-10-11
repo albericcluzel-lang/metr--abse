@@ -173,7 +173,7 @@ def test_explicit_files_outside_the_project(project, fake, tmp_path):
 
 def test_one_failure_does_not_stop_the_others(project, capsys):
     settings = Settings.from_env()
-    jobs = etapes.rendus_jobs(project, project.captures(), 1, False)
+    jobs = etapes.rendus_jobs(project, project.captures(), 1, False, 14)
     jobs[0].run = lambda provider: (_ for _ in ()).throw(ServiceError("contenu refusé"))
     report = etapes.execute(jobs, FalProvider(settings, client=FakeFal()), 2, print)
     assert len(report.errors) == 1 and "contenu refusé" in report.errors[0]
@@ -183,7 +183,7 @@ def test_one_failure_does_not_stop_the_others(project, capsys):
 def test_fatal_error_stops_jobs_not_started(project):
     settings = Settings.from_env()
     fal = FakeFal(fail={settings.image_model: FatalError("clé refusée")})
-    report = etapes.execute(etapes.rendus_jobs(project, project.captures(), 1, False),
+    report = etapes.execute(etapes.rendus_jobs(project, project.captures(), 1, False, 14),
                             FalProvider(settings, client=fal), 1, print)
     assert report.aborted == "clé refusée"
     assert len(fal.calls) == 1  # la seconde vue n'est pas envoyée

@@ -40,6 +40,11 @@ VIDEO_MODELS = {
 
 PROVIDERS = ("gemini", "fal")
 RESOLUTIONS = ("1K", "2K", "4K")
+# Limites des modèles d'image Gemini (guide officiel Nano Banana, octobre 2026) : nombre d'images
+# en entrée et définition maximale. Nano Banana 2 Lite est le seul présenté comme gratuit.
+FREE_IMAGE_MODEL = "gemini-3.1-flash-lite-image"
+GEMINI_IMAGE_LIMITS = {FREE_IMAGE_MODEL: (3, "1K")}
+DEFAULT_IMAGE_LIMITS = (14, "4K")
 ASPECT_RATIOS = ("auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16")
 NO_MODEL = ("aucun", "none")
 
@@ -71,6 +76,13 @@ class Settings:
     video_options: dict = field(default_factory=dict)
 
     @property
+    def image_limits(self) -> tuple[int, str]:
+        """Nombre maximal d'images envoyées et définition maximale du modèle d'image."""
+        if self.provider == "gemini":
+            return GEMINI_IMAGE_LIMITS.get(self.gemini_image_model, DEFAULT_IMAGE_LIMITS)
+        return DEFAULT_IMAGE_LIMITS
+
+    @property
     def text_model(self) -> str | None:
         """Modèle qui écrit le storyboard chez le fournisseur choisi (None : plans types)."""
         return self.gemini_text_model if self.provider == "gemini" else self.llm_model
@@ -82,9 +94,17 @@ class Settings:
         provider = _env("RENDU_FOURNISSEUR", "gemini" if gemini_key else "fal").lower()
         if provider not in PROVIDERS:
             raise ConfigError(f"RENDU_FOURNISSEUR doit valoir {' ou '.join(PROVIDERS)}.")
-        resolution = _env("RENDU_RESOLUTION", "2K").upper()
-        if resolution not in RESOLUTIONS:
+        gemini_image_model = _env("RENDU_GEMINI_MODELE_IMAGE", "gemini-3-pro-image")
+        max_resolution = (GEMINI_IMAGE_LIMITS.get(gemini_image_model, DEFAULT_IMAGE_LIMITS)[1]
+                          if provider == "gemini" else "4K")
+        resolution = _env("RENDU_RESOLUTION").upper()
+        if resolution and resolution not in RESOLUTIONS:
             raise ConfigError(f"RENDU_RESOLUTION doit valoir {', '.join(RESOLUTIONS)}.")
+        if resolution and RESOLUTIONS.index(resolution) > RESOLUTIONS.index(max_resolution):
+            raise ConfigError(f"Le modèle {gemini_image_model} ne produit pas d'image en {resolution} "
+                              f"({max_resolution} au plus) : corrigez RENDU_RESOLUTION.")
+        # Par défaut 2K, ou moins si le modèle ne va pas jusque-là.
+        resolution = resolution or min("2K", max_resolution, key=RESOLUTIONS.index)
         aspect_ratio = _env("RENDU_FORMAT", "auto").lower()
         if aspect_ratio not in ASPECT_RATIOS:
             raise ConfigError(f"RENDU_FORMAT doit valoir {', '.join(ASPECT_RATIOS)}.")
@@ -110,7 +130,7 @@ class Settings:
         return cls(
             provider=provider,
             gemini_key=gemini_key,
-            gemini_image_model=_env("RENDU_GEMINI_MODELE_IMAGE", "gemini-3-pro-image"),
+            gemini_image_model=gemini_image_model,
             gemini_text_model=None if gemini_text_model.lower() in NO_MODEL else gemini_text_model,
             fal_key=_env("FAL_KEY"),
             image_model=_env("RENDU_MODELE_IMAGE", "fal-ai/nano-banana-pro/edit"),

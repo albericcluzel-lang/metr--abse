@@ -116,9 +116,12 @@ def check_fatal(status_code: int, error: dict, model: str | None) -> None:
     if "API_KEY_INVALID" in str(error) or "API key not valid" in message:
         raise FatalError("Google refuse la clé GEMINI_API_KEY : vérifiez-la dans Google AI Studio.")
     if status_code == 429 and "limit: 0" in message:
-        raise FatalError("Le projet de la clé n'a pas de facturation active : la génération d'images n'est pas "
-                         "gratuite. Activez les crédits Google AI Pro et rattachez-les au projet de la clé "
-                         f"(README, étape 1). Détail : {message}")
+        raise FatalError(f"Le modèle « {model} » n'est pas compris dans l'offre gratuite de l'API (quota 0) : "
+                         "activez la facturation sur le projet de la clé (README, étape 1A), ou choisissez un "
+                         f"modèle gratuit (README, « Avec une clé gratuite »). Détail : {message}")
+    if status_code == 429 and "PerDay" in str(error):
+        raise FatalError(f"Quota du jour atteint pour « {model} » : relancez demain, la commande reprendra là où "
+                         f"elle s'est arrêtée (remise à zéro vers 9 h, heure de Paris). Détail : {message}")
     if status_code in (401, 403) or error.get("status") == "FAILED_PRECONDITION":
         raise FatalError(f"Google refuse l'accès ({status_code}) : {message}")
     if status_code == 404:

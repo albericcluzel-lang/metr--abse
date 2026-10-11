@@ -65,8 +65,9 @@ Ce look est écrit dans [`rendu_ia/prompts.py`](rendu_ia/prompts.py), avec la co
 | écriture du storyboard | Gemini 3.5 Flash | moins de 0,01 $ |
 | upscale | Nano Banana Pro, image régénérée en 4K | environ 0,24 $ par image |
 | vidéo | Flow (Veo), dans l'abonnement | inclus, dans la limite des crédits Flow du mois |
+| option économique | Nano Banana 2 Lite (`gemini-3.1-flash-lite-image`), 1K | gratuit si l'offre gratuite le confirme, sinon environ 0,03 $ par image |
 
-L'abonnement Google AI Pro donne **10 $ de crédits Google Cloud par mois**, soit environ 70 images en 2K. Un projet type (6 vues, 4 essais, 4 plans, 10 upscales) revient à environ 4 $. L'upscale est l'étape la plus chère : réservez-le aux images que vous montrerez, en les donnant à la commande `upscale`. Pour diviser le prix des images par deux, Nano Banana 2 (`RENDU_GEMINI_MODELE_IMAGE=gemini-3.1-flash-image`) est un peu moins fin.
+L'abonnement Google AI Pro donne **10 $ de crédits Google Cloud par mois**, soit environ 70 images en 2K, après un premier dépôt prépayé de 5 $ qui sert de réserve (étape 1, A2). Un projet type (6 vues, 4 essais, 4 plans, 10 upscales) revient à environ 4 $. L'upscale est l'étape la plus chère : réservez-le aux images que vous montrerez, en les donnant à la commande `upscale`. Pour diviser le prix des images par deux, Nano Banana 2 (`RENDU_GEMINI_MODELE_IMAGE=gemini-3.1-flash-image`) est un peu moins fin.
 
 **Coût avec fal.ai.** Ordre de grandeur relevé en octobre 2026, à vérifier sur <https://fal.ai/pricing> :
 
@@ -88,14 +89,18 @@ Pour un projet type (6 vues, 4 essais, 4 plans, 4 vidéos de 5 s avec Kling), co
 
 ### 1. Créer la clé
 
-**A. Gemini, avec l'abonnement Google AI Pro**
+**A. Gemini**
 
-L'abonnement ne fournit pas de clé : il donne 10 $ de crédits Google Cloud par mois, qu'il faut activer une fois. Les noms des menus peuvent varier.
+Créer une clé est **gratuit et sans carte bancaire**, sur <https://aistudio.google.com/apikey>. Ce qu'elle permet sans payer dépend du projet Google Cloud où elle est créée : une clé n'a pas de facturation propre, elle suit celle de son projet. Deux façons de faire :
 
-1. Avec le compte Google de l'abonnement, allez sur <https://google.dev> et activez les avantages développeur (« Activate Developer Benefits »). Choisissez ou créez un projet Google Cloud, et rattachez les crédits à un compte de facturation. Il faut une carte bancaire, même si les crédits paient la consommation.
-2. Sur <https://aistudio.google.com/apikey>, créez une clé API **dans ce même projet**, et vérifiez que la facturation y est activée : sans elle, la génération d'images est refusée (« limit: 0 »).
-3. D'après des retours d'utilisateurs, si AI Studio vous propose la facturation **prépayée**, les crédits de l'abonnement ne s'appliqueraient qu'après un premier achat de crédit prépayé. Vérifiez dans la console de facturation que les 10 $ apparaissent bien.
-4. Par sécurité, fixez une alerte de budget à 10 $ dans la console Google Cloud (*Facturation > Budgets et alertes*) : au-delà, la carte serait débitée.
+- **A1. Clé gratuite** (projet sans facturation) : storyboard gratuit, et images gratuites seulement avec Nano Banana 2 Lite, si Google le confirme (voir « Avec une clé gratuite » plus bas). Rien à payer, aucun risque de débit. Si votre compte Google a déjà un projet Google Cloud avec facturation, créez la clé dans un **nouveau projet sans facturation**, sinon elle sera payante.
+- **A2. Clé payée par les crédits de l'abonnement Google AI Pro** : tous les modèles, dont Nano Banana Pro. Mise en place :
+  1. Avec le compte Google de l'abonnement, activez les avantages développeur du Google Developer Program (page « My Benefits » ou « Activate Developer Benefits » sur <https://google.dev>). Rattachez les 10 $ de crédits mensuels à un compte de facturation Google Cloud. Il faut une carte bancaire.
+  2. Dans AI Studio, créez la clé dans le projet rattaché à ce compte de facturation.
+  3. **Achetez une première fois du crédit prépayé (5 $ au minimum)** dans AI Studio. C'est la règle officielle de la facturation prépayée : les crédits de l'abonnement ne s'appliquent qu'après ce premier achat, et tant que ce solde reste au-dessus de 0 $. Les crédits de l'abonnement sont consommés avant ce solde, qui sert donc de réserve.
+  4. Pour ne jamais être débité par surprise : laissez la **recharge automatique désactivée**, et fixez un **plafond de dépense mensuel** sur le projet (AI Studio, onglet *Spend*, « Monthly spend cap »). Sans recharge automatique, la dépense s'arrête quand le solde est épuisé, avec au plus un petit dépassement (Google peut mettre environ 10 minutes à couper). Les alertes de budget de la console Google Cloud, elles, préviennent sans rien bloquer.
+
+  L'essai gratuit Google Cloud (300 $ pour les nouveaux comptes) **ne paie pas** l'API Gemini : inutile de l'ouvrir pour ce programme.
 
 **B. fal.ai**
 
@@ -130,6 +135,38 @@ Appartement Arceaux\
   references\     photos de matériaux et d'ambiance, nommées par leur usage
   ambiance.txt    l'ambiance voulue, en quelques lignes (facultatif)
 ```
+
+## Avec une clé gratuite
+
+Ce qui marche sans payer, avec une clé créée dans un projet **sans facturation** (situation d'octobre 2026, d'après la documentation officielle de Google) :
+
+| Étape | Gratuit ? |
+|---|---|
+| storyboard (Gemini 3.5 Flash) | **oui**, dans la limite du quota gratuit du jour (une vingtaine de demandes par jour d'après des mesures non officielles ; le chiffre exact est dans AI Studio, onglet *Rate limit*) |
+| images avec Nano Banana Pro ou Nano Banana 2 | **non** : pas d'offre gratuite dans l'API |
+| images avec Nano Banana 2 Lite | **à tester** : le guide officiel de Google le présente comme gratuit, la page des tarifs dit le contraire |
+| upscale | **non** par Gemini : Nano Banana 2 Lite ne dépasse pas 1K. Un logiciel gratuit d'agrandissement sur votre PC, par exemple Upscayl, fait l'affaire. |
+| vidéo | **non** par l'API ; **oui** dans Flow avec l'abonnement Google AI Pro (fiche préparée par la commande `video`) |
+
+**Pour tester Nano Banana 2 Lite gratuitement**, ajoutez dans `.env` :
+
+```
+RENDU_GEMINI_MODELE_IMAGE=gemini-3.1-flash-lite-image
+```
+
+puis lancez une seule image : `python -m rendu_ia essais PROJET --capture salon --nombre 1 --apply`. Sans facturation, Google ne peut rien débiter. Si le modèle n'est pas gratuit, le programme l'indique (« quota 0 ») et s'arrête.
+
+Ce modèle a ses limites, que le programme applique de lui-même :
+
+- **3 images au plus par demande** : la capture et deux références pour les essais, ou la capture, l'image maître et une référence pour les rendus. Les références en trop ne sont pas envoyées (le programme dit lesquelles partent) : mettez la plus importante en premier dans l'ordre alphabétique.
+- **1K au plus** (768 × 1344 pixels en vertical) : assez pour valider une direction avec un client, un peu juste pour une impression.
+- La qualité est en dessous de Nano Banana Pro : vérifiez que la géométrie de la capture est bien respectée.
+
+Quand le quota gratuit du jour est atteint, le programme s'arrête avec un message clair ; relancé le lendemain, il reprend là où il s'était arrêté. Le quota repart vers 9 h, heure de Paris.
+
+**Confidentialité de l'offre gratuite.** Hors Europe, Google peut utiliser les données de l'offre gratuite pour améliorer ses produits, avec relecture humaine possible. D'après les conditions additionnelles de l'API Gemini, dans l'Espace économique européen, en Suisse et au Royaume-Uni, ce sont les règles de l'offre payante qui s'appliquent, sans entraînement sur vos données. Vérifiez-le sur la page des conditions avant d'y envoyer des projets clients. Ces mêmes conditions imposent l'offre payante si l'outil est mis à la disposition d'autres personnes (collègues, clients) dans l'Espace économique européen.
+
+**L'abonnement Google AI Pro et l'usage à la main.** Les avantages de l'abonnement (quotas plus élevés, Nano Banana) valent dans l'application Gemini et dans l'interface web d'AI Studio, en usage manuel, mais pas pour une clé API. Faire les rendus à la main dans l'application Gemini reste donc gratuit, sans le script.
 
 ## Préparer les captures dans Archicad
 
@@ -234,9 +271,9 @@ sorties\
 | `GEMINI_API_KEY` | | clé Google AI Studio |
 | `FAL_KEY` | | clé fal.ai ; sans elle, les vidéos passent par une fiche pour Flow |
 | `RENDU_FOURNISSEUR` | `gemini` si `GEMINI_API_KEY` est remplie, sinon `fal` | fournisseur des images, du storyboard et de l'upscale |
-| `RENDU_GEMINI_MODELE_IMAGE` | `gemini-3-pro-image` | Nano Banana Pro ; `gemini-3.1-flash-image` pour Nano Banana 2 |
+| `RENDU_GEMINI_MODELE_IMAGE` | `gemini-3-pro-image` | Nano Banana Pro ; `gemini-3.1-flash-image` pour Nano Banana 2 ; `gemini-3.1-flash-lite-image` pour Nano Banana 2 Lite (gratuit à confirmer, 3 images et 1K au plus) |
 | `RENDU_GEMINI_MODELE_TEXTE` | `gemini-3.5-flash` | modèle Gemini qui écrit le storyboard ; `aucun` pour 4 plans types |
-| `RENDU_RESOLUTION` | `2K` | `1K`, `2K` ou `4K` |
+| `RENDU_RESOLUTION` | `2K` (`1K` avec Nano Banana 2 Lite) | `1K`, `2K` ou `4K` |
 | `RENDU_FORMAT` | `auto` | format des images ; `auto` garde celui de la capture |
 | `RENDU_MODELE_IMAGE` | `fal-ai/nano-banana-pro/edit` | modèle d'image chez fal.ai |
 | `RENDU_MODELE_LLM` | `anthropic/claude-sonnet-5.5` | modèle chez fal.ai qui écrit le storyboard ; `aucun` pour 4 plans types |
@@ -252,7 +289,9 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 - **« GEMINI_API_KEY manquante » ou « FAL_KEY manquante »** : la clé n'est pas dans `.env`, ou `.env` n'est pas dans le dossier `rendu-ia`.
 - **« Google refuse la clé »** : la clé est mal copiée ou a été supprimée dans AI Studio.
-- **« pas de facturation active »** (« limit: 0 ») : la génération d'images n'est pas gratuite. Activez la facturation sur le projet de la clé et vérifiez que les crédits AI Pro y sont rattachés (étape 1A).
+- **« n'est pas compris dans l'offre gratuite de l'API (quota 0) »** : ce modèle demande une clé payante. Activez la facturation sur le projet de la clé et vérifiez que les crédits AI Pro y sont rattachés (étape 1, A2), ou passez à un modèle gratuit.
+- **« Quota du jour atteint »** : le quota gratuit du jour est épuisé. Relancez la même commande le lendemain.
+- **Crédits AI Pro visibles mais pas utilisés** : avec la facturation prépayée, ils ne s'appliquent qu'après un premier achat de crédit prépayé et tant que ce solde reste au-dessus de 0 $ (étape 1, A2).
 - **« Modèle introuvable chez Google »** : Google a renommé ou arrêté le modèle. Le nom en cours est sur <https://ai.google.dev/gemini-api/docs/models>, à mettre dans `RENDU_GEMINI_MODELE_IMAGE` ou `RENDU_GEMINI_MODELE_TEXTE`.
 - **Gemini saturé** (erreurs 429 ou 503) : le programme réessaie de lui-même jusqu'à 4 fois en patientant. Si cela persiste, baissez `RENDU_PARALLELE` à 1.
 - **« fal.ai refuse la demande : clé invalide ou crédit épuisé »** : vérifiez la clé et le crédit sur fal.ai. Le passage s'arrête pour ne rien envoyer d'autre.
@@ -263,7 +302,7 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image n'a encore été produite avec une vraie clé. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image n'a encore été produite avec une vraie clé. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 

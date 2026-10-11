@@ -82,9 +82,15 @@ def execute(jobs: list[Job], provider: Provider, parallel: int, out: Callable[[s
 
 # --- Rendus ----------------------------------------------------------------------------------------
 
-def render_inputs(project: Project, capture: Path, master: Path | None) -> tuple[list[Path], list[str]]:
+def reference_room(max_inputs: int, master: bool) -> int:
+    """Nombre de références qu'on peut joindre à la capture (et à l'image maître)."""
+    return max(0, min(MAX_REFERENCES, max_inputs - 1 - (1 if master else 0)))
+
+
+def render_inputs(project: Project, capture: Path, master: Path | None,
+                  max_inputs: int) -> tuple[list[Path], list[str]]:
     """Images envoyées pour une vue (capture, image maître, références) et noms des références."""
-    references = project.references()[:MAX_REFERENCES]
+    references = project.references()[:reference_room(max_inputs, master is not None)]
     inputs = [capture] + ([master] if master else []) + references
     return inputs, [reference_label(path) for path in references]
 
@@ -93,21 +99,21 @@ def numbered(base: Path, count: int) -> list[Path]:
     return [base] if count == 1 else [base.with_name(f"{base.name}_{index}") for index in range(1, count + 1)]
 
 
-def essais_jobs(project: Project, capture: Path, count: int, people: bool) -> list[Job]:
+def essais_jobs(project: Project, capture: Path, count: int, people: bool, max_inputs: int) -> list[Job]:
     """Plusieurs propositions d'une même vue, pour valider la direction avec le client."""
-    inputs, labels = render_inputs(project, capture, None)
+    inputs, labels = render_inputs(project, capture, None, max_inputs)
     prompt = prompts.render_prompt(master=False, references=labels, brief=project.brief(), people=people)
     targets = [project.output / "essais" / f"{capture.stem}_{index}" for index in range(1, count + 1)]
     return [Job(f"essais {capture.name} ({count} image(s))", targets, IMAGE_SUFFIXES,
                 lambda provider: provider.generate_images(prompt, inputs, targets), [capture])]
 
 
-def rendus_jobs(project: Project, captures: list[Path], variants: int, people: bool) -> list[Job]:
+def rendus_jobs(project: Project, captures: list[Path], variants: int, people: bool, max_inputs: int) -> list[Job]:
     """Toutes les vues, avec l'image maître comme référence de style pour qu'elles se ressemblent."""
     master = project.master()
     jobs = []
     for capture in captures:
-        inputs, labels = render_inputs(project, capture, master)
+        inputs, labels = render_inputs(project, capture, master, max_inputs)
         prompt = prompts.render_prompt(master=master is not None, references=labels, brief=project.brief(),
                                        people=people)
         targets = numbered(project.output / "rendus" / capture.stem, variants)

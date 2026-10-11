@@ -232,3 +232,56 @@ def test_whole_workflow_with_gemini_and_flow(settings, project, monkeypatch, cap
 def test_simulation_names_gemini(settings, project, capsys):
     assert cli.main(["rendus", str(project.root)]) == 0
     assert "Gemini (gemini-3-pro-image)" in capsys.readouterr().out
+
+
+def test_free_model_is_limited_to_1k_and_three_images(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "cle")
+    monkeypatch.setenv("RENDU_GEMINI_MODELE_IMAGE", "gemini-3.1-flash-lite-image")
+    settings = Settings.from_env()
+    assert (settings.resolution, settings.image_limits) == ("1K", (3, "1K"))
+    monkeypatch.setenv("RENDU_RESOLUTION", "2K")
+    with pytest.raises(ConfigError, match="1K au plus"):
+        Settings.from_env()
+
+
+def test_default_resolution_is_2k_for_pro(settings):
+    assert (settings.resolution, settings.image_limits) == ("2K", (14, "4K"))
+
+
+def test_free_model_gets_only_the_references_it_accepts(monkeypatch, project, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", "cle")
+    monkeypatch.setenv("RENDU_GEMINI_MODELE_IMAGE", "gemini-3.1-flash-lite-image")
+    make_image(project.root / "references" / "tissu - bouclette.jpg")
+    google = FakeGoogle()
+    monkeypatch.setattr(cli, "make_provider", google.provider)
+    assert cli.main(["essais", str(project.root), "--capture", "salon", "--nombre", "1", "--apply"]) == 0
+    parts = google.bodies()[-1]["contents"][0]["parts"]
+    assert len(parts) == 4   # consigne, capture et 2 références
+    assert google.bodies()[-1]["generationConfig"]["imageConfig"]["imageSize"] == "1K"
+
+    assert cli.main(["maitre", str(project.root), str(project.output / "essais" / "salon_1.png")]) == 0
+    capsys.readouterr()
+    assert cli.main(["rendus", str(project.root), "--apply"]) == 0
+    assert "n'en accepte que 1" in capsys.readouterr().out
+    parts = google.bodies()[-1]["contents"][0]["parts"]
+    assert len(parts) == 4   # consigne, capture, image maître et 1 seule référence
+    assert "image 3: sol - parquet chene point de hongrie" in parts[0]["text"]
+    assert "tissu" not in parts[0]["text"]
+
+
+def test_free_model_cannot_upscale(monkeypatch, project, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", "cle")
+    monkeypatch.setenv("RENDU_GEMINI_MODELE_IMAGE", "gemini-3.1-flash-lite-image")
+    make_image(project.output / "rendus" / "salon.png")
+    assert cli.main(["upscale", str(project.root)]) == 1
+    assert "ne peut pas agrandir" in capsys.readouterr().err
+
+
+def test_daily_quota_stops_everything_without_retrying(settings, project, tmp_path):
+    exhausted = error_answer(429, "RESOURCE_EXHAUSTED", "Quota exceeded for metric: "
+                             "generate_content_free_tier_requests, limit: 20, model: gemini-3.1-flash-lite-image",
+                             [{"violations": [{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}])
+    google = FakeGoogle(exhausted)
+    with pytest.raises(FatalError, match="Quota du jour"):
+        google.provider(settings).generate_images("P", project.captures()[:1], [tmp_path / "a"])
+    assert google.sleeps == []
