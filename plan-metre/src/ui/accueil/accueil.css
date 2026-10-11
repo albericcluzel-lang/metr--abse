@@ -34,7 +34,13 @@
   margin: 0;
   padding: 0;
   display: grid;
+  /* minmax(0, …) : une adresse longue se coupe au lieu d'élargir la carte. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
+}
+
+.accueil-liste > li {
+  min-width: 0;
 }
 
 .accueil-carte {

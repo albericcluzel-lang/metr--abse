@@ -201,7 +201,7 @@ test('importe plusieurs photos, les range par niveau et supprime', async ({ page
   await attendreVignettes(page, 4);
 });
 
-test('« Voir sur le plan » sélectionne la photo épinglée', async ({ page }) => {
+test('« Voir sur le plan » sélectionne la photo épinglée', async ({ page }, info) => {
   const id = await ouvrirPhotos(page);
   await page.locator('input[data-role="photo-import"]').setInputFiles([fichierPhoto('a.png', 0)]);
   await attendreVignettes(page, 1);
@@ -227,7 +227,14 @@ test('« Voir sur le plan » sélectionne la photo épinglée', async ({ page })
     return { selection: e.selection, niveau: e.projet.niveaux.find((n: any) => n.id === e.niveauId)?.nom };
   });
   expect(etat).toEqual({ selection: { type: 'photo', photoId }, niveau: 'R+1' });
-  // « Retour » ramène aux photos, sans visionneuse.
+  // « Retour » ramène aux photos, sans visionneuse. Sur téléphone, le premier
+  // retour ferme d'abord la feuille de la photo sélectionnée sur le plan.
+  if (info.project.name === 'android') {
+    await expect(page.locator('.plan2d-proprietes')).toBeVisible();
+    await page.goBack();
+    await expect(page.locator('.plan2d-proprietes')).toHaveCount(0);
+    await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  }
   await page.goBack();
   await expect(page).toHaveURL(/\/photos$/);
   await expect(page.getByRole('dialog')).toHaveCount(0);

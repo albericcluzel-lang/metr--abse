@@ -3,12 +3,13 @@
 // regard (écarts), avec copie vers Excel ou un devis et impression (PDF).
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { flushSync } from 'react-dom';
 import { formaterEcart } from '../../metre/calcul';
 import { useEtat } from '../../store/etat';
 import { BarreHaut, Bouton, BoutonIcone, EtatVide, Segments } from '../commun/composants';
 import { notifier } from '../commun/dialogues';
 import { Icone } from '../commun/Icone';
-import { naviguer } from '../routeur';
+import { naviguer, revenir } from '../routeur';
 import { useProjetOuvert } from '../useProjetOuvert';
 import { GuideMetre } from './GuideMetre';
 import {
@@ -87,17 +88,32 @@ export function EcranMetre({ id }: { id: string }) {
     dernierChoix = { projetId: id, mode, onglet };
   }, [id, mode, onglet]);
 
+  // Imprimer (bouton ou menu du navigateur) : tout le détail est déplié.
+  useEffect(() => {
+    const deplier = () => flushSync(() => setReplies(new Set()));
+    window.addEventListener('beforeprint', deplier);
+    return () => window.removeEventListener('beforeprint', deplier);
+  }, []);
+
   const metres = useMemo(() => (projet ? calculerMetres(projet) : null), [projet]);
+  // Au-delà de 10 pièces, l'onglet « Par pièce » s'ouvre replié (lisible et rapide).
+  const repliInitial = useRef(false);
   const vue = useMemo(
     () => (projet && metres ? construireVueMetre(projet, metres, mode, onglet) : null),
     [projet, metres, mode, onglet],
   );
   const fermerGuide = useCallback(() => setGuide(false), []);
+  useEffect(() => {
+    if (onglet !== 'piece' || !vue || repliInitial.current) return;
+    repliInitial.current = true;
+    const cles = vue.groupes.flatMap((g) => g.blocs.map((b) => b.cle));
+    if (cles.length > 10) setReplies(new Set(cles));
+  }, [onglet, vue]);
 
   if (!projet || !vue) return <div className="chargement">Chargement du chantier…</div>;
 
   const date = dateDuJour();
-  const allerAuPlan = () => naviguer({ ecran: 'chantier', id });
+  const allerAuPlan = () => revenir({ ecran: 'chantier', id });
 
   const copier = async () => {
     const texte = texteTabule(vue, { nom: projet.nom, client: projet.client, adresse: projet.adresse, date });
@@ -116,7 +132,7 @@ export function EcranMetre({ id }: { id: string }) {
     // La variante cible n'est « renove » que si le niveau a déjà un plan rénové : rien n'est créé.
     etat.choisirVariante(b.varianteCible ?? 'actuel');
     etat.selectionner({ type: 'piece', pieceId: b.pieceId });
-    naviguer({ ecran: 'chantier', id });
+    revenir({ ecran: 'chantier', id });
   };
 
   const basculer = (cle: string) =>
@@ -491,7 +507,8 @@ function CartePiece({
         </button>
       </div>
       <div className="metre-carte-corps" id={idCorps} hidden={replie}>
-        <Sections sections={bloc.sections} vue={vue} cle={bloc.cle} />
+        {/* Carte repliée : détail non construit (chantiers de plusieurs dizaines de pièces). */}
+        {!replie && <Sections sections={bloc.sections} vue={vue} cle={bloc.cle} />}
       </div>
     </article>
   );

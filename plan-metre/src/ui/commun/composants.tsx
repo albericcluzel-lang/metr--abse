@@ -10,6 +10,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Icone, type NomIcone } from './Icone';
+import { useRetourSysteme } from './retour';
 
 type VarianteBouton = 'primaire' | 'secondaire' | 'contour' | 'fantome' | 'danger';
 
@@ -107,6 +108,8 @@ export function FeuilleBas({
   sansVoile?: boolean;
 }) {
   const idTitre = useId();
+  const corps = useRef<HTMLDivElement>(null);
+  useRetourSysteme(ouverte, onFermer);
   useEffect(() => {
     if (!ouverte) return;
     const surTouche = (e: KeyboardEvent) => {
@@ -115,6 +118,11 @@ export function FeuilleBas({
     window.addEventListener('keydown', surTouche);
     return () => window.removeEventListener('keydown', surTouche);
   }, [ouverte, onFermer]);
+  // Nouveau contenu (autre élément sélectionné) : on repart du haut du panneau.
+  const cleTitre = typeof titre === 'string' ? titre : '';
+  useEffect(() => {
+    if (corps.current) corps.current.scrollTop = 0;
+  }, [cleTitre]);
   if (!ouverte) return null;
   return createPortal(
     <>
@@ -125,7 +133,9 @@ export function FeuilleBas({
           <h2 id={idTitre}>{titre}</h2>
           <BoutonIcone icone="fermer" libelle="Fermer" onClick={onFermer} />
         </div>
-        <div className="feuille-corps">{children}</div>
+        <div className="feuille-corps" ref={corps}>
+          {children}
+        </div>
         {pied && <div className="feuille-pied">{pied}</div>}
       </section>
     </>,
@@ -387,6 +397,7 @@ export function MenuActions({
 }) {
   const [ouvert, setOuvert] = useState(false);
   const racine = useRef<HTMLDivElement>(null);
+  useRetourSysteme(ouvert, () => setOuvert(false));
   useEffect(() => {
     if (!ouvert) return;
     const fermer = (e: PointerEvent) => {

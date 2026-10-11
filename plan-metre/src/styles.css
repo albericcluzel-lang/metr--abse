@@ -494,6 +494,7 @@ button.element-liste:hover {
 
 .badge {
   display: inline-flex;
+  white-space: nowrap;
   align-items: center;
   gap: 4px;
   font-size: 12px;
@@ -643,7 +644,9 @@ button.element-liste:hover {
   position: fixed;
   z-index: 300;
   left: 50%;
-  bottom: calc(96px + var(--zone-sure-bas));
+  /* En haut, sous les barres : ne cache ni la pilule du plan ni les feuilles du bas. */
+  top: calc(var(--hauteur-barre) + var(--zone-sure-haut) + 58px);
+  cursor: pointer;
   transform: translateX(-50%);
   max-width: calc(100vw - 32px);
   background: var(--texte);
@@ -821,6 +824,18 @@ button.element-liste:hover {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* Écrans tactiles : cibles d'au moins 44 px (sélecteur de niveau, segments). */
+@media (pointer: coarse) {
+  .segments button {
+    min-height: 44px;
+  }
+
+  .chantier-barre-niveau .saisie,
+  .chantier-barre-niveau .saisie select {
+    min-height: 44px;
+  }
 }
 
 @media print {

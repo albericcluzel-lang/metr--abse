@@ -10,7 +10,7 @@ import { confirmer, notifier } from './commun/dialogues';
 import { Icone } from './commun/Icone';
 import { EditeurPlan2D } from './plan/EditeurPlan2D';
 import { Vue3D } from './plan3d/Vue3D';
-import { naviguer } from './routeur';
+import { naviguer, revenir } from './routeur';
 import { useProjetOuvert } from './useProjetOuvert';
 
 const NOMS_NIVEAUX = ['Sous-sol', 'RDC', 'R+1', 'R+2', 'R+3', 'Combles', 'Mezzanine'];
@@ -83,7 +83,7 @@ export function EcranChantier({ id }: { id: string }) {
       <BarreHaut
         titre={projet.nom}
         sousTitre={etat.enregistrement === 'erreur' ? 'Enregistrement impossible — vérifiez l’espace disponible' : projet.adresse || undefined}
-        onRetour={() => naviguer({ ecran: 'accueil' })}
+        onRetour={() => revenir({ ecran: 'accueil' })}
         libelleRetour="Mes chantiers"
         actions={<MenuActions entrees={entreesMenu} />}
       />

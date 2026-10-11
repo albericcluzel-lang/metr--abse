@@ -11,7 +11,8 @@ import { pluriel } from '../accueil/presentation';
 import { BarreHaut, Bouton, BoutonIcone, ChampSelection, EtatVide } from '../commun/composants';
 import { notifier } from '../commun/dialogues';
 import { Icone } from '../commun/Icone';
-import { naviguer } from '../routeur';
+import { revenir } from '../routeur';
+import { useRetourSysteme } from '../commun/retour';
 import { useProjetOuvert } from '../useProjetOuvert';
 import { useUrlImage } from './images';
 import { libellePhoto, ordreAffichage, regrouperPhotos, texteProgression } from './presentation';
@@ -34,21 +35,7 @@ export function EcranPhotos({ id }: { id: string }) {
   }, [ordre, ouverteId]);
 
   // Le bouton « retour » d'Android ferme la visionneuse au lieu de quitter l'écran.
-  const visionneuseOuverte = ouverteId !== null;
-  useEffect(() => {
-    if (!visionneuseOuverte) return;
-    history.pushState({ abseVisionneuse: true }, '');
-    let fermeeParRetour = false;
-    const surRetour = () => {
-      fermeeParRetour = true;
-      setOuverteId(null);
-    };
-    window.addEventListener('popstate', surRetour);
-    return () => {
-      window.removeEventListener('popstate', surRetour);
-      if (!fermeeParRetour && (history.state as { abseVisionneuse?: boolean } | null)?.abseVisionneuse) history.back();
-    };
-  }, [visionneuseOuverte]);
+  useRetourSysteme(ouverteId !== null, () => setOuverteId(null));
 
   if (!projet) return <div className="chargement">Chargement du chantier…</div>;
 
@@ -57,7 +44,7 @@ export function EcranPhotos({ id }: { id: string }) {
       <BarreHaut
         titre="Photos"
         sousTitre={projet.nom}
-        onRetour={() => naviguer({ ecran: 'chantier', id })}
+        onRetour={() => revenir({ ecran: 'chantier', id })}
         libelleRetour="Retour au plan"
       />
       <main className="ecran-contenu etroit photos-contenu">

@@ -6,7 +6,7 @@ import { useEtat } from '../../store/etat';
 import { pluriel } from '../accueil/presentation';
 import { BarreHaut, Bouton, ChampNombre, ChampTexte, Interrupteur } from '../commun/composants';
 import { confirmer, notifier } from '../commun/dialogues';
-import { naviguer } from '../routeur';
+import { naviguer, revenir } from '../routeur';
 import { useProjetOuvert } from '../useProjetOuvert';
 import { partageFichiersDisponible, partagerChantier, telechargerChantier } from './actionsSauvegarde';
 import { modifierChantier, nouvelleSessionSaisie, TexteObligatoire } from './champs';
@@ -46,7 +46,7 @@ export function EcranParametres({ id }: { id: string }) {
       <BarreHaut
         titre="Réglages du chantier"
         sousTitre={projet.nom}
-        onRetour={() => naviguer({ ecran: 'chantier', id })}
+        onRetour={() => revenir({ ecran: 'chantier', id })}
         libelleRetour="Retour au plan"
       />
       {/* Chaque champ touché ouvre une nouvelle étape d'annulation (frappe regroupée). */}
@@ -121,8 +121,8 @@ export function EcranParametres({ id }: { id: string }) {
           <div className="carte">
             <p className="reglages-texte">
               Le chantier n’est enregistré que sur cet appareil. Le fichier exporté contient le plan, les réglages et{' '}
-              {nombrePhotos > 0 ? `les ${pluriel(nombrePhotos, 'photo')}` : 'les photos'} ; il s’ouvre sur un autre
-              téléphone ou un PC avec « Importer un chantier », depuis l’accueil.
+              {nombrePhotos === 1 ? 'la photo' : nombrePhotos > 1 ? `les ${pluriel(nombrePhotos, 'photo')}` : 'les photos'} ; il
+              s’ouvre sur un autre téléphone ou un PC avec « Importer un chantier », depuis l’accueil.
             </p>
             <div className="reglages-actions">
               <Bouton icone="telecharger" onClick={() => void telechargerChantier(projet.id)}>

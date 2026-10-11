@@ -6,6 +6,7 @@ import { create } from 'zustand';
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Bouton } from './composants';
+import { useRetourSysteme } from './retour';
 
 interface DemandeConfirmation {
   titre: string;
@@ -57,6 +58,7 @@ export function HoteDialogues() {
     confirmation?.resoudre(ok);
     useDialogues.setState({ confirmation: null });
   };
+  useRetourSysteme(confirmation !== null, () => repondre(false));
 
   return createPortal(
     <>
@@ -78,7 +80,11 @@ export function HoteDialogues() {
         </>
       )}
       {notification && (
-        <div className={`toast${notification.erreur ? ' erreur' : ''}`} role="status">
+        <div
+          className={`toast${notification.erreur ? ' erreur' : ''}`}
+          role="status"
+          onClick={() => useDialogues.setState({ notification: null })}
+        >
           {notification.message}
         </div>
       )}

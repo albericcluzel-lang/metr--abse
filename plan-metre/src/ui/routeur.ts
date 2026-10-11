@@ -8,6 +8,7 @@
 //   #/chantier/<id>/parametres      réglages du chantier
 
 import { useSyncExternalStore } from 'react';
+import { prendreEntreesCouches } from './commun/retour';
 
 export type Route =
   | { ecran: 'accueil' }
@@ -40,14 +41,40 @@ export function cheminRoute(r: Route): string {
   return r.ecran === 'chantier' ? base : `${base}/${r.ecran}`;
 }
 
+interface EtatHistorique {
+  /** Adresse de l'écran d'où l'on vient (pour revenir() par l'historique). */
+  abseDepuis?: string;
+}
+
+function normaliser(hash: string): string {
+  return cheminRoute(analyserRoute(hash));
+}
+
 export function naviguer(r: Route, options: { remplacer?: boolean } = {}): void {
   const cible = cheminRoute(r);
   if (options.remplacer) {
-    history.replaceState(null, '', cible);
-    window.dispatchEvent(new HashChangeEvent('hashchange'));
+    const depuis = (history.state as EtatHistorique | null)?.abseDepuis;
+    history.replaceState(depuis === undefined ? null : { abseDepuis: depuis }, '', cible);
   } else {
-    window.location.hash = cible;
+    const etat = { abseDepuis: normaliser(window.location.hash) };
+    // L'entrée d'une feuille ou d'un menu qu'on quitte en changeant d'écran
+    // est réutilisée : sinon le retour retomberait sur une entrée fantôme.
+    if (prendreEntreesCouches() > 0) history.replaceState(etat, '', cible);
+    else history.pushState(etat, '', cible);
   }
+  window.dispatchEvent(new HashChangeEvent('hashchange'));
+}
+
+/**
+ * Retour vers `r` (flèche « retour » d'un écran) : on remonte l'historique
+ * si l'on vient de `r`, sinon on remplace l'écran courant. Le bouton retour
+ * d'Android ne repasse ainsi pas par les écrans déjà quittés.
+ */
+export function revenir(r: Route): void {
+  const restes = prendreEntreesCouches();
+  const depuis = (history.state as EtatHistorique | null)?.abseDepuis;
+  if (depuis !== undefined && depuis === cheminRoute(r)) history.go(-(1 + restes));
+  else naviguer(r, { remplacer: true });
 }
 
 function abonner(rappel: () => void) {
