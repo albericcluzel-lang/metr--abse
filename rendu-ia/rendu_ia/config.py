@@ -38,6 +38,7 @@ VIDEO_MODELS = {
                            {"resolution": "720p", "aspect_ratio": "auto", "generate_audio": False}),
 }
 
+PROVIDERS = ("gemini", "fal")
 RESOLUTIONS = ("1K", "2K", "4K")
 ASPECT_RATIOS = ("auto", "21:9", "16:9", "3:2", "4:3", "5:4", "1:1", "4:5", "3:4", "2:3", "9:16")
 NO_MODEL = ("aucun", "none")
@@ -45,6 +46,13 @@ NO_MODEL = ("aucun", "none")
 
 @dataclass(frozen=True)
 class Settings:
+    # Fournisseur des images, du storyboard et de l'upscale : « gemini » (clé Google AI Studio,
+    # crédits inclus dans l'abonnement Google AI Pro) ou « fal » (fal.ai). Les vidéos passent
+    # toujours par fal.ai ; sans clé fal.ai, le programme prépare une fiche pour Flow.
+    provider: str = "fal"
+    gemini_key: str = ""
+    gemini_image_model: str = "gemini-3-pro-image"          # Nano Banana Pro
+    gemini_text_model: str | None = "gemini-3.5-flash"      # None : plans types
     fal_key: str = ""
     image_model: str = "fal-ai/nano-banana-pro/edit"
     resolution: str = "2K"
@@ -62,9 +70,18 @@ class Settings:
     upscale_options: dict = field(default_factory=dict)
     video_options: dict = field(default_factory=dict)
 
+    @property
+    def text_model(self) -> str | None:
+        """Modèle qui écrit le storyboard chez le fournisseur choisi (None : plans types)."""
+        return self.gemini_text_model if self.provider == "gemini" else self.llm_model
+
     @classmethod
     def from_env(cls) -> "Settings":
         load_dotenv(PROJECT_DIR / ".env")
+        gemini_key = _env("GEMINI_API_KEY") or _env("GOOGLE_API_KEY")
+        provider = _env("RENDU_FOURNISSEUR", "gemini" if gemini_key else "fal").lower()
+        if provider not in PROVIDERS:
+            raise ConfigError(f"RENDU_FOURNISSEUR doit valoir {' ou '.join(PROVIDERS)}.")
         resolution = _env("RENDU_RESOLUTION", "2K").upper()
         if resolution not in RESOLUTIONS:
             raise ConfigError(f"RENDU_RESOLUTION doit valoir {', '.join(RESOLUTIONS)}.")
@@ -89,7 +106,12 @@ class Settings:
             raise ConfigError("RENDU_PARALLELE doit être entre 1 et 8.")
         check_video_seconds(video, video_name, video_seconds)
         llm_model = _env("RENDU_MODELE_LLM", "anthropic/claude-sonnet-5.5")
+        gemini_text_model = _env("RENDU_GEMINI_MODELE_TEXTE", "gemini-3.5-flash")
         return cls(
+            provider=provider,
+            gemini_key=gemini_key,
+            gemini_image_model=_env("RENDU_GEMINI_MODELE_IMAGE", "gemini-3-pro-image"),
+            gemini_text_model=None if gemini_text_model.lower() in NO_MODEL else gemini_text_model,
             fal_key=_env("FAL_KEY"),
             image_model=_env("RENDU_MODELE_IMAGE", "fal-ai/nano-banana-pro/edit"),
             resolution=resolution,

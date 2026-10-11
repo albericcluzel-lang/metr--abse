@@ -4,15 +4,17 @@ from __future__ import annotations
 import tempfile
 import threading
 from pathlib import Path
+from typing import Protocol
 from urllib.parse import urlparse
 
 import httpx
 from PIL import Image, ImageOps
 
-from .config import ConfigError, FatalError
+from .config import ConfigError, FatalError, Settings
 from .projet import IMAGE_SUFFIXES, VIDEO_SUFFIXES, write_atomic
 
 INPUT_MAX_SIDE = 2048   # côté maximal des images envoyées aux modèles (rendu en 2K)
+VISION_ENDPOINT = "openrouter/router/vision"   # modèles de texte qui lisent les images, via OpenRouter
 TIMEOUTS = {"image": 600, "text": 300, "upscale": 900, "video": 1800}   # secondes, file d'attente comprise
 CONTENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp",
                  "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm"}
@@ -20,6 +22,22 @@ CONTENT_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp
 
 class ServiceError(RuntimeError):
     """Une demande a échoué (refus du modèle, délai dépassé...) : les autres continuent."""
+
+
+class Provider(Protocol):
+    """Ce que les étapes demandent à un fournisseur (fal.ai ou Gemini)."""
+
+    name: str
+
+    def generate_images(self, prompt: str, inputs: list[Path], targets: list[Path]) -> list[Path]:
+        """Une image par chemin de `targets` (sans extension), à partir des images `inputs`."""
+
+    def write_text(self, image: Path, system: str, prompt: str) -> str:
+        """Réponse du modèle de texte qui regarde `image` (storyboard)."""
+
+    def upscale(self, source: Path, target: Path) -> Path: ...
+
+    def close(self) -> None: ...
 
 
 class Fal:
@@ -82,6 +100,58 @@ class Fal:
             raise ServiceError(f"{what} : délai dépassé ({exc})") from exc
         except httpx.HTTPError as exc:
             raise ServiceError(f"{what} : erreur réseau : {exc}") from exc
+
+
+class FalProvider:
+    """Images (Nano Banana Pro), storyboard, upscale et vidéo (Kling, Seedance) par fal.ai."""
+
+    name = "fal.ai"
+
+    def __init__(self, settings: Settings, client: Fal | None = None):
+        self.settings = settings
+        self.fal = client or Fal(settings.fal_key)
+
+    def close(self) -> None:
+        self.fal.close()
+
+    def generate_images(self, prompt: str, inputs: list[Path], targets: list[Path]) -> list[Path]:
+        arguments = {
+            "prompt": prompt,
+            "image_urls": [self.fal.upload(path) for path in inputs],
+            "num_images": len(targets),
+            "resolution": self.settings.resolution,
+            "aspect_ratio": self.settings.aspect_ratio,
+            "output_format": "png",
+            **self.settings.image_options,
+        }
+        result = self.fal.run(self.settings.image_model, arguments, kind="image")
+        urls = media_urls(result)
+        if len(urls) < len(targets):
+            note = f" Réponse du modèle : {result['description']}" if result.get("description") else ""
+            raise ServiceError(f"{len(urls)} image(s) reçue(s) sur {len(targets)} demandée(s).{note}")
+        return [self.fal.download(url, target) for url, target in zip(urls, targets)]
+
+    def write_text(self, image: Path, system: str, prompt: str) -> str:
+        arguments = {"model": self.settings.llm_model, "system_prompt": system, "prompt": prompt,
+                     "image_urls": [self.fal.upload(image)]}
+        return str(self.fal.run(VISION_ENDPOINT, arguments, kind="text").get("output", ""))
+
+    def upscale(self, source: Path, target: Path) -> Path:
+        arguments = {"image_url": self.fal.upload(source, max_side=None),
+                     "upscale_factor": self.settings.upscale_factor, **self.settings.upscale_options}
+        urls = media_urls(self.fal.run(self.settings.upscale_model, arguments, kind="upscale"))
+        if not urls:
+            raise ServiceError("aucune image reçue")
+        return self.fal.download(urls[0], target)
+
+    def animate(self, source: Path, prompt: str, target: Path) -> Path:
+        video = self.settings.video
+        arguments = {video.image_field: self.fal.upload(source), "prompt": prompt,
+                     "duration": str(self.settings.video_seconds), **video.options, **self.settings.video_options}
+        urls = media_urls(self.fal.run(video.endpoint, arguments, kind="video"))
+        if not urls:
+            raise ServiceError("aucune vidéo reçue")
+        return self.fal.download(urls[0], target)
 
 
 def prepare_image(path: Path, max_side: int, workdir: Path) -> Path:

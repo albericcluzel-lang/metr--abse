@@ -5,7 +5,7 @@ import pytest
 from rendu_ia import __main__ as cli
 from rendu_ia import etapes, prompts
 from rendu_ia.config import FatalError, Settings
-from rendu_ia.service import ServiceError
+from rendu_ia.service import VISION_ENDPOINT, FalProvider, ServiceError
 
 from .conftest import FakeFal, make_image
 
@@ -15,11 +15,17 @@ STORYBOARD = json.dumps({"shots": [
 ]})
 
 
+def use_fal(monkeypatch, fal: FakeFal) -> FakeFal:
+    """fal.ai remplacé par `fal` pour les images comme pour les vidéos."""
+    monkeypatch.setenv("FAL_KEY", "test")
+    monkeypatch.setattr(cli, "make_provider", lambda settings: FalProvider(settings, client=fal))
+    monkeypatch.setattr(cli, "make_video_provider", lambda settings: FalProvider(settings, client=fal))
+    return fal
+
+
 @pytest.fixture
 def fake(monkeypatch):
-    fal = FakeFal(storyboard=STORYBOARD)
-    monkeypatch.setattr(cli, "Fal", lambda key: fal)
-    return fal
+    return use_fal(monkeypatch, FakeFal(storyboard=STORYBOARD))
 
 
 def run(*args) -> int:
@@ -27,9 +33,9 @@ def run(*args) -> int:
 
 
 def test_simulation_sends_nothing(project, monkeypatch, capsys):
-    def no_fal(key):
+    def no_provider(settings):
         raise AssertionError("la simulation ne doit rien envoyer")
-    monkeypatch.setattr(cli, "Fal", no_fal)
+    monkeypatch.setattr(cli, "make_provider", no_provider)
     assert run("essais", project.root, "--capture", "salon") == 0
     assert run("rendus", project.root) == 0
     out = capsys.readouterr().out
@@ -94,7 +100,7 @@ def test_storyboard_then_upscale_then_video_follow_the_planned_motion(project, f
     etapes.lock_master(project, make_image(project.root / "choix.png"))
     assert run("storyboard", project.root, "--plans", "2", "--apply") == 0
     text_call = fake.calls[0]
-    assert text_call[0] == "openrouter/router/vision"
+    assert text_call[0] == VISION_ENDPOINT
     assert text_call[1]["model"] == "anthropic/claude-sonnet-5.5"
     assert text_call[1]["image_urls"] == ["https://cdn.test/maitre.png"]
     folder = project.output / "storyboard" / "maitre"
@@ -129,12 +135,12 @@ def test_storyboard_without_text_model_uses_default_shots(project, fake, monkeyp
     monkeypatch.setenv("RENDU_MODELE_LLM", "aucun")
     etapes.lock_master(project, make_image(project.root / "choix.png"))
     assert run("storyboard", project.root, "--plans", "6", "--apply") == 0
-    assert all(endpoint != etapes.VISION_ENDPOINT for endpoint, _ in fake.calls)
+    assert all(endpoint != VISION_ENDPOINT for endpoint, _ in fake.calls)
     assert len(fake.calls) == len(prompts.DEFAULT_SHOTS)
 
 
 def test_unreadable_storyboard_is_reported(project, monkeypatch, capsys):
-    monkeypatch.setattr(cli, "Fal", lambda key: FakeFal(storyboard="Désolé, je ne peux pas."))
+    use_fal(monkeypatch, FakeFal(storyboard="Désolé, je ne peux pas."))
     etapes.lock_master(project, make_image(project.root / "choix.png"))
     assert run("storyboard", project.root, "--apply") == 1
     assert "storyboard illisible" in capsys.readouterr().err
@@ -167,9 +173,9 @@ def test_explicit_files_outside_the_project(project, fake, tmp_path):
 
 def test_one_failure_does_not_stop_the_others(project, capsys):
     settings = Settings.from_env()
-    jobs = etapes.rendus_jobs(project, settings, project.captures(), 1, False)
-    jobs[0].run = lambda fal: (_ for _ in ()).throw(ServiceError("contenu refusé"))
-    report = etapes.execute(jobs, FakeFal(), 2, print)
+    jobs = etapes.rendus_jobs(project, project.captures(), 1, False)
+    jobs[0].run = lambda provider: (_ for _ in ()).throw(ServiceError("contenu refusé"))
+    report = etapes.execute(jobs, FalProvider(settings, client=FakeFal()), 2, print)
     assert len(report.errors) == 1 and "contenu refusé" in report.errors[0]
     assert len(report.produced) == 1 and report.aborted is None
 
@@ -177,7 +183,8 @@ def test_one_failure_does_not_stop_the_others(project, capsys):
 def test_fatal_error_stops_jobs_not_started(project):
     settings = Settings.from_env()
     fal = FakeFal(fail={settings.image_model: FatalError("clé refusée")})
-    report = etapes.execute(etapes.rendus_jobs(project, settings, project.captures(), 1, False), fal, 1, print)
+    report = etapes.execute(etapes.rendus_jobs(project, project.captures(), 1, False),
+                            FalProvider(settings, client=fal), 1, print)
     assert report.aborted == "clé refusée"
     assert len(fal.calls) == 1  # la seconde vue n'est pas envoyée
     assert report.produced == []
@@ -188,8 +195,8 @@ def test_missing_images_in_answer_are_an_error(project, tmp_path):
         def run(self, endpoint, arguments, *, kind):
             return {"images": [], "description": "I can't edit this image."}
     with pytest.raises(ServiceError, match="0 image\\(s\\) reçue\\(s\\) sur 1.*can't edit"):
-        etapes.generate_images(ShortFal(), Settings.from_env(), "prompt", [project.captures()[0]],
-                               [tmp_path / "out"])
+        FalProvider(Settings.from_env(), client=ShortFal()).generate_images(
+            "prompt", [project.captures()[0]], [tmp_path / "out"])
 
 
 def test_nouveau_creates_the_project_skeleton(tmp_path):
@@ -234,7 +241,7 @@ def test_new_master_makes_renders_and_storyboard_out_of_date(project, fake, caps
 
     fake.calls.clear()
     assert run("storyboard", project.root, "--plans", "2", "--apply") == 0
-    assert [endpoint for endpoint, _ in fake.calls].count(etapes.VISION_ENDPOINT) == 1
+    assert [endpoint for endpoint, _ in fake.calls].count(VISION_ENDPOINT) == 1
     assert len(fake.calls) == 3  # storyboard réécrit et ses 2 plans refaits
 
 

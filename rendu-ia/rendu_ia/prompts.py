@@ -96,6 +96,16 @@ def render_prompt(*, master: bool, references: list[str], brief: str | None, peo
     return "\n\n".join(parts)
 
 
+# --- Upscale par régénération (fournisseur Gemini, qui n'a pas de modèle d'upscale) -------------
+
+UPSCALE_PROMPT = "\n\n".join([
+    "Reproduce image 1 exactly, at a higher resolution. Keep the composition, framing, perspective, every "
+    "object, material, colour, light and shadow strictly identical. Only add the fine detail, texture and "
+    "sharpness of a high-resolution photograph: no change, no addition, no removal, no new style.",
+    SINGLE_IMAGE,
+])
+
+
 # --- Storyboard : plans cinématiques tirés de l'image maître ------------------------------------
 
 @dataclass(frozen=True)

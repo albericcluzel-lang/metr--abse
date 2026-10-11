@@ -2,7 +2,12 @@
 
 Ce programme reproduit le workflow d'une vidéo TikTok (compte @dlhio.g, « Tout ce workflow IA m'a pris 35 minutes ») : à partir de simples **captures de la fenêtre 3D d'Archicad**, il produit des **rendus photoréalistes cohérents entre eux**, un **storyboard** de plans cinématiques, des images **upscalées** et de **courtes vidéos animées**.
 
-Tout passe par **fal.ai**, un service qui donne accès, avec une seule clé et un paiement à l'usage, aux modèles cités dans la vidéo : Nano Banana Pro (images), Kling et Seedance 2.0 (vidéo), Claude (texte).
+Deux fournisseurs au choix :
+
+- **Gemini**, avec une clé Google AI Studio payée par les crédits mensuels de l'abonnement **Google AI Pro**. Gemini fait les images (Nano Banana Pro), le storyboard et l'upscale ; les vidéos se font dans **Flow**, inclus dans l'abonnement, à l'aide d'une fiche préparée par le programme.
+- **fal.ai**, un service qui donne accès, avec une seule clé et un paiement à l'usage, à tous les modèles cités dans la vidéo : Nano Banana Pro (images), Kling et Seedance 2.0 (vidéo), Claude (texte).
+
+Avec les deux clés, les images passent par Gemini et les vidéos par fal.ai.
 
 Par défaut, chaque commande payante fonctionne en **simulation** : elle affiche ce qu'elle enverrait et combien de demandes seraient payées, sans rien envoyer. Il faut ajouter `--apply` pour lancer réellement.
 
@@ -52,7 +57,18 @@ Ce look est écrit dans [`rendu_ia/prompts.py`](rendu_ia/prompts.py), avec la co
 
 ## Avant de commencer
 
-**Coût.** Ordre de grandeur relevé en octobre 2026, à vérifier sur <https://fal.ai/pricing> :
+**Coût avec Gemini.** Ordre de grandeur relevé en octobre 2026, à vérifier sur la page des tarifs de l'API Gemini :
+
+| Étape | Modèle par défaut | Prix indicatif |
+|---|---|---|
+| essais, rendus, plans du storyboard | Nano Banana Pro (`gemini-3-pro-image`) en 2K | environ 0,13 $ par image (4K : 0,24 $) |
+| écriture du storyboard | Gemini 3.5 Flash | moins de 0,01 $ |
+| upscale | Nano Banana Pro, image régénérée en 4K | environ 0,24 $ par image |
+| vidéo | Flow (Veo), dans l'abonnement | inclus, dans la limite des crédits Flow du mois |
+
+L'abonnement Google AI Pro donne **10 $ de crédits Google Cloud par mois**, soit environ 70 images en 2K. Un projet type (6 vues, 4 essais, 4 plans, 10 upscales) revient à environ 4 $. L'upscale est l'étape la plus chère : réservez-le aux images que vous montrerez, en les donnant à la commande `upscale`. Pour diviser le prix des images par deux, Nano Banana 2 (`RENDU_GEMINI_MODELE_IMAGE=gemini-3.1-flash-image`) est un peu moins fin.
+
+**Coût avec fal.ai.** Ordre de grandeur relevé en octobre 2026, à vérifier sur <https://fal.ai/pricing> :
 
 | Étape | Modèle par défaut | Prix indicatif |
 |---|---|---|
@@ -64,13 +80,24 @@ Ce look est écrit dans [`rendu_ia/prompts.py`](rendu_ia/prompts.py), avec la co
 
 Pour un projet type (6 vues, 4 essais, 4 plans, 4 vidéos de 5 s avec Kling), comptez **environ 5 $**. Un travail déjà fait n'est pas repayé : relancer une commande ne produit que ce qui manque, ou ce dont l'image de départ a changé depuis (capture réexportée, nouvelle image maître, rendu refait).
 
-**Confidentialité.** Les captures et les références partent chez fal.ai (États-Unis), qui les transmet aux éditeurs des modèles (Google, Kuaishou pour Kling, ByteDance pour Seedance, Anthropic). Pour un projet confidentiel, faites valider l'usage par le client ou l'employeur, et ouvrez le compte au nom de l'entreprise.
+**Confidentialité.** Avec Gemini, les captures et les références partent chez Google ; avec la facturation activée, les conditions de Google indiquent qu'elles ne servent pas à entraîner ses modèles. Avec fal.ai, elles partent aux États-Unis, chez fal.ai puis chez les éditeurs des modèles (Google, Kuaishou pour Kling, ByteDance pour Seedance, Anthropic). Pour un projet confidentiel, faites valider l'usage par le client ou l'employeur.
 
 **Limites.** Les images sont des **perspectives d'ambiance, non contractuelles**. Même avec la consigne de tout garder, l'IA peut déplacer une menuiserie, changer une proportion ou inventer un détail : vérifiez chaque image avant de la montrer, et refaites celles qui s'écartent du projet.
 
 ## Mise en place
 
-### 1. Créer la clé fal.ai
+### 1. Créer la clé
+
+**A. Gemini, avec l'abonnement Google AI Pro**
+
+L'abonnement ne fournit pas de clé : il donne 10 $ de crédits Google Cloud par mois, qu'il faut activer une fois. Les noms des menus peuvent varier.
+
+1. Avec le compte Google de l'abonnement, allez sur <https://google.dev> et activez les avantages développeur (« Activate Developer Benefits »). Choisissez ou créez un projet Google Cloud, et rattachez les crédits à un compte de facturation. Il faut une carte bancaire, même si les crédits paient la consommation.
+2. Sur <https://aistudio.google.com/apikey>, créez une clé API **dans ce même projet**, et vérifiez que la facturation y est activée : sans elle, la génération d'images est refusée (« limit: 0 »).
+3. D'après des retours d'utilisateurs, si AI Studio vous propose la facturation **prépayée**, les crédits de l'abonnement ne s'appliqueraient qu'après un premier achat de crédit prépayé. Vérifiez dans la console de facturation que les 10 $ apparaissent bien.
+4. Par sécurité, fixez une alerte de budget à 10 $ dans la console Google Cloud (*Facturation > Budgets et alertes*) : au-delà, la carte serait débitée.
+
+**B. fal.ai**
 
 1. Créez un compte sur <https://fal.ai> (au nom de l'entreprise si possible).
 2. Ajoutez du crédit dans *Billing* : 10 $ suffisent pour plusieurs projets.
@@ -87,7 +114,7 @@ pip install -r requirements.txt
 copy .env.example .env            # Windows   (Mac/Linux : cp .env.example .env)
 ```
 
-Ouvrez `.env` et collez la clé après `FAL_KEY=`. Les autres réglages sont facultatifs.
+Ouvrez `.env` et collez la clé après `GEMINI_API_KEY=` (ou après `FAL_KEY=` pour fal.ai). Les autres réglages sont facultatifs.
 
 ### 3. Créer un projet
 
@@ -167,7 +194,10 @@ Le modèle de texte regarde l'image maître et écrit 4 plans cinématiques (pla
 python -m rendu_ia upscale PROJET --apply
 ```
 
-Agrandit ×2 les rendus et les plans du storyboard, dans `sorties\upscale`. Vous pouvez aussi donner des fichiers précis à la suite du projet.
+Agrandit les rendus et les plans du storyboard, dans `sorties\upscale`. Vous pouvez aussi donner des fichiers précis à la suite du projet, pour n'agrandir que ceux-là.
+
+- Avec fal.ai, un vrai modèle d'upscale (SeedVR2) agrandit l'image ×2.
+- Avec Gemini, qui n'a pas de modèle d'upscale, Nano Banana Pro **régénère** l'image en 4K avec la consigne de ne rien changer. Comparez avec l'original : un petit détail peut bouger.
 
 ### Étape 6 : vidéos
 
@@ -175,7 +205,13 @@ Agrandit ×2 les rendus et les plans du storyboard, dans `sorties\upscale`. Vous
 python -m rendu_ia video PROJET --apply
 ```
 
-Anime chaque plan du storyboard (la version upscalée si elle existe) avec le mouvement prévu, en 5 secondes, dans `sorties\videos`. Sans storyboard, ce sont les rendus qui sont animés. Options : `--modele seedance`, `--duree 8`, `--mouvement "slow lateral slide from left to right"` (en anglais) pour imposer un mouvement.
+La commande prend les plans du storyboard (la version upscalée si elle est à jour), ou les rendus s'il n'y a pas de storyboard, et le mouvement de caméra prévu pour chacun.
+
+**Sans clé fal.ai (abonnement Google AI Pro)** : rien n'est envoyé. La commande écrit `sorties\videos\a_faire_dans_flow.txt`, une fiche avec, pour chaque plan, l'image à importer et le texte à coller dans **Flow** (<https://labs.google/flow>, mode « Frames to Video »). Les vidéos sont payées par les crédits Flow de l'abonnement.
+
+**Avec une clé fal.ai** : les vidéos sont faites automatiquement (relancer avec `--apply`), en 5 secondes, dans `sorties\videos`. Options : `--modele seedance`, `--duree 8`.
+
+Dans les deux cas, `--mouvement "slow lateral slide from left to right"` (en anglais) impose un mouvement à tous les plans.
 
 Il reste à monter les clips (Clipchamp, fourni avec Windows, CapCut, Premiere...).
 
@@ -195,31 +231,39 @@ sorties\
 
 | Réglage | Par défaut | Rôle |
 |---|---|---|
-| `FAL_KEY` | | clé fal.ai, obligatoire pour `--apply` |
+| `GEMINI_API_KEY` | | clé Google AI Studio |
+| `FAL_KEY` | | clé fal.ai ; sans elle, les vidéos passent par une fiche pour Flow |
+| `RENDU_FOURNISSEUR` | `gemini` si `GEMINI_API_KEY` est remplie, sinon `fal` | fournisseur des images, du storyboard et de l'upscale |
+| `RENDU_GEMINI_MODELE_IMAGE` | `gemini-3-pro-image` | Nano Banana Pro ; `gemini-3.1-flash-image` pour Nano Banana 2 |
+| `RENDU_GEMINI_MODELE_TEXTE` | `gemini-3.5-flash` | modèle Gemini qui écrit le storyboard ; `aucun` pour 4 plans types |
 | `RENDU_RESOLUTION` | `2K` | `1K`, `2K` ou `4K` |
 | `RENDU_FORMAT` | `auto` | format des images ; `auto` garde celui de la capture |
-| `RENDU_MODELE_IMAGE` | `fal-ai/nano-banana-pro/edit` | modèle d'image |
-| `RENDU_MODELE_LLM` | `anthropic/claude-sonnet-5.5` | modèle qui écrit le storyboard ; `aucun` pour 4 plans types |
-| `RENDU_MODELE_UPSCALE` | `fal-ai/seedvr/upscale/image` | modèle d'upscale |
-| `RENDU_FACTEUR_UPSCALE` | `2` | agrandissement, de 1 à 4 |
+| `RENDU_MODELE_IMAGE` | `fal-ai/nano-banana-pro/edit` | modèle d'image chez fal.ai |
+| `RENDU_MODELE_LLM` | `anthropic/claude-sonnet-5.5` | modèle chez fal.ai qui écrit le storyboard ; `aucun` pour 4 plans types |
+| `RENDU_MODELE_UPSCALE` | `fal-ai/seedvr/upscale/image` | modèle d'upscale chez fal.ai |
+| `RENDU_FACTEUR_UPSCALE` | `2` | agrandissement chez fal.ai, de 1 à 4 |
 | `RENDU_MODELE_VIDEO` | `kling` | `kling` (3 à 15 s) ou `seedance` (4 à 15 s) |
 | `RENDU_DUREE_VIDEO` | `5` | durée de chaque clip, en secondes |
 | `RENDU_PARALLELE` | `3` | demandes envoyées en même temps |
 
-Réglages avancés, si fal.ai fait évoluer ses modèles : `RENDU_ENDPOINT_VIDEO` (nouvelle version d'un modèle vidéo) et `RENDU_OPTIONS_IMAGE`, `RENDU_OPTIONS_UPSCALE`, `RENDU_OPTIONS_VIDEO`, des paramètres ajoutés tels quels aux demandes, au format JSON (voir l'onglet *API* de la page du modèle sur fal.ai).
+Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle version d'un modèle vidéo chez fal.ai) et `RENDU_OPTIONS_IMAGE`, `RENDU_OPTIONS_UPSCALE`, `RENDU_OPTIONS_VIDEO`, des paramètres ajoutés tels quels aux demandes, au format JSON (onglet *API* de la page du modèle sur fal.ai ; pour Gemini, `RENDU_OPTIONS_IMAGE` est ajouté à `generationConfig`).
 
 ## En cas de problème
 
-- **« FAL_KEY manquante »** : la clé n'est pas dans `.env`, ou `.env` n'est pas dans le dossier `rendu-ia`.
+- **« GEMINI_API_KEY manquante » ou « FAL_KEY manquante »** : la clé n'est pas dans `.env`, ou `.env` n'est pas dans le dossier `rendu-ia`.
+- **« Google refuse la clé »** : la clé est mal copiée ou a été supprimée dans AI Studio.
+- **« pas de facturation active »** (« limit: 0 ») : la génération d'images n'est pas gratuite. Activez la facturation sur le projet de la clé et vérifiez que les crédits AI Pro y sont rattachés (étape 1A).
+- **« Modèle introuvable chez Google »** : Google a renommé ou arrêté le modèle. Le nom en cours est sur <https://ai.google.dev/gemini-api/docs/models>, à mettre dans `RENDU_GEMINI_MODELE_IMAGE` ou `RENDU_GEMINI_MODELE_TEXTE`.
+- **Gemini saturé** (erreurs 429 ou 503) : le programme réessaie de lui-même jusqu'à 4 fois en patientant. Si cela persiste, baissez `RENDU_PARALLELE` à 1.
 - **« fal.ai refuse la demande : clé invalide ou crédit épuisé »** : vérifiez la clé et le crédit sur fal.ai. Le passage s'arrête pour ne rien envoyer d'autre.
-- **« refusé par fal.ai (422) »** : un paramètre a été refusé ou l'image a été bloquée par le filtre du modèle. Le message de fal.ai suit. Si un modèle a changé ses paramètres, ajustez `RENDU_OPTIONS_*`.
+- **« refusé par fal.ai (422) »**, **« aucune image reçue »** ou **« bloquée par le filtre »** : un paramètre a été refusé, ou l'image a été bloquée par le filtre du modèle. L'explication du modèle suit. Si un modèle a changé ses paramètres, ajustez `RENDU_OPTIONS_*`.
 - **Un rendu s'écarte de la maquette** : refaites-le (`rendus PROJET --capture salon --refaire --apply`), retirez les références qui ne concernent pas cette vue, ou précisez `ambiance.txt`.
 - **« storyboard illisible »** : le modèle de texte n'a pas répondu au bon format. Relancez, ou utilisez les plans types (`RENDU_MODELE_LLM=aucun`).
 - **Des échecs isolés** : relancez la même commande, seuls les manquants sont refaits.
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de fal.ai. Les noms des modèles et de leurs paramètres viennent de la documentation de fal.ai consultée en octobre 2026, mais aucun appel réel n'a encore été fait. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image n'a encore été produite avec une vraie clé. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 

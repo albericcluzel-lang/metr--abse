@@ -9,8 +9,9 @@ from pathlib import Path
 from . import etapes, prompts
 from .config import VIDEO_MODELS, ConfigError, FatalError, Settings, check_video_seconds
 from .etapes import Job
+from .gemini import GeminiProvider
 from .projet import MAX_REFERENCES, Project
-from .service import Fal, ServiceError
+from .service import FalProvider, Provider, ServiceError
 
 
 def bounded_int(low: int, high: int):
@@ -65,11 +66,29 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def run_jobs(settings: Settings, jobs: list[Job], args: argparse.Namespace, fal: Fal | None = None,
-             extra: int = 0) -> int:
+def make_provider(settings: Settings) -> Provider:
+    """Fournisseur des images, du storyboard et de l'upscale."""
+    return GeminiProvider(settings) if settings.provider == "gemini" else FalProvider(settings)
+
+
+def make_video_provider(settings: Settings) -> FalProvider:
+    return FalProvider(settings)
+
+
+def provider_label(settings: Settings, video: bool = False) -> str:
+    if video:
+        return f"fal.ai, {settings.video_name} ({settings.video.endpoint})"
+    if settings.provider == "gemini":
+        return f"Gemini ({settings.gemini_image_model})"
+    return f"fal.ai ({settings.image_model})"
+
+
+def run_jobs(settings: Settings, jobs: list[Job], args: argparse.Namespace, provider: Provider | None = None,
+             extra: int = 0, video: bool = False) -> int:
     """Simulation (liste de ce qui serait payé) ou lancement réel avec --apply.
 
     `extra` : demandes payantes annoncées en plus des travaux (storyboard à écrire).
+    `video` : travaux à confier au fournisseur des vidéos (fal.ai).
     """
     todo = etapes.pending(jobs, args.refaire)
     skipped = len(jobs) - len(todo)
@@ -81,16 +100,17 @@ def run_jobs(settings: Settings, jobs: list[Job], args: argparse.Namespace, fal:
     if not args.apply:
         for job in todo:
             print(f"[à faire] {job.label}")
-        print(f"Simulation : {len(todo) + extra} demande(s) payante(s) seraient envoyée(s) à fal.ai. "
-              "Ajoutez --apply pour lancer.")
+        print(f"Simulation : {len(todo) + extra} demande(s) payante(s) seraient envoyée(s) à "
+              f"{provider_label(settings, video)}. Ajoutez --apply pour lancer.")
         return 0
-    own = fal is None
-    fal = fal or Fal(settings.fal_key)
+    own = provider is None
+    if own:
+        provider = make_video_provider(settings) if video else make_provider(settings)
     try:
-        report = etapes.execute(todo, fal, settings.parallel, lambda line: print(line, flush=True))
+        report = etapes.execute(todo, provider, settings.parallel, lambda line: print(line, flush=True))
     finally:
         if own:
-            fal.close()
+            provider.close()
     if report.produced:
         print(f"{len(report.produced)} fichier(s) produit(s).")
     if report.errors:
@@ -130,7 +150,7 @@ def cmd_essais(settings: Settings, args: argparse.Namespace) -> int:
         names = ", ".join(path.name for path in captures) or "aucune"
         raise ConfigError(f"Précisez la vue avec --capture (captures du projet : {names}).")
     warn_references(project)
-    code = run_jobs(settings, etapes.essais_jobs(project, settings, capture, args.nombre, args.personnages), args)
+    code = run_jobs(settings, etapes.essais_jobs(project, capture, args.nombre, args.personnages), args)
     if args.apply and code == 0:
         print(f"Choisissez la meilleure proposition dans {project.output / 'essais'}, puis :\n"
               f"  python -m rendu_ia maitre \"{project.root}\" <image choisie>")
@@ -156,7 +176,7 @@ def cmd_rendus(settings: Settings, args: argparse.Namespace) -> int:
         print("Attention : pas d'image maître, les vues risquent de ne pas se ressembler. "
               "Conseil : lancer d'abord « essais » puis « maitre ».")
     warn_references(project)
-    code = run_jobs(settings, etapes.rendus_jobs(project, settings, captures, args.variantes, args.personnages), args)
+    code = run_jobs(settings, etapes.rendus_jobs(project, captures, args.variantes, args.personnages), args)
     if args.apply and code == 0:
         print(f"Ensuite : python -m rendu_ia storyboard \"{project.root}\"")
     return code
@@ -170,9 +190,9 @@ def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
     if not image.is_file():
         raise ConfigError(f"Image introuvable : {image}")
     count = args.plans
-    if settings.llm_model is None and count > len(prompts.DEFAULT_SHOTS):
+    if settings.text_model is None and count > len(prompts.DEFAULT_SHOTS):
         count = len(prompts.DEFAULT_SHOTS)
-        print(f"Sans modèle de texte (RENDU_MODELE_LLM=aucun), {count} plans types au plus.")
+        print(f"Sans modèle de texte, {count} plans types au plus.")
     folder = etapes.storyboard_folder(project, image)
     shots = None if args.refaire else etapes.load_storyboard(folder, image)
     if shots is not None:
@@ -181,24 +201,24 @@ def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
         print("L'image de départ a changé depuis le storyboard : il sera réécrit et ses plans refaits.")
 
     if shots is not None:
-        code = run_jobs(settings, etapes.shot_jobs(settings, image, folder, shots), args)
+        code = run_jobs(settings, etapes.shot_jobs(image, folder, shots), args)
     elif not args.apply:
-        writer = settings.llm_model or "plans types, sans modèle de texte"
+        writer = settings.text_model or "plans types, sans modèle de texte"
         print(f"[à faire] écrire le storyboard de {count} plans ({writer})")
         placeholders = [prompts.Shot("plan à écrire", "", "") for _ in range(count)]
-        code = run_jobs(settings, etapes.shot_jobs(settings, image, folder, placeholders), args,
-                        extra=1 if settings.llm_model else 0)
+        code = run_jobs(settings, etapes.shot_jobs(image, folder, placeholders), args,
+                        extra=1 if settings.text_model else 0)
     else:
-        fal = Fal(settings.fal_key)
+        provider = make_provider(settings)
         try:
             print("Écriture du storyboard...", flush=True)
-            shots = etapes.write_storyboard(fal, settings, image, count)
+            shots = etapes.write_storyboard(provider, settings, image, count)
             etapes.save_storyboard(folder, image, shots)
             for index, shot in enumerate(shots, start=1):
                 print(f"  plan {index} : {shot.title}\n      image : {shot.image}\n      mouvement : {shot.motion}")
-            code = run_jobs(settings, etapes.shot_jobs(settings, image, folder, shots), args, fal)
+            code = run_jobs(settings, etapes.shot_jobs(image, folder, shots), args, provider)
         finally:
-            fal.close()
+            provider.close()
     if args.apply and code == 0:
         print(f"Plans dans {folder}. Ensuite : python -m rendu_ia upscale \"{project.root}\"")
     return code
@@ -209,7 +229,9 @@ def cmd_upscale(settings: Settings, args: argparse.Namespace) -> int:
     sources = existing_files(args.fichiers) if args.fichiers else etapes.default_upscale_sources(project)
     if not sources:
         raise ConfigError("Aucune image à agrandir : lancez d'abord « rendus » ou « storyboard ».")
-    code = run_jobs(settings, etapes.upscale_jobs(project, settings, sources), args)
+    if settings.provider == "gemini":
+        print("Avec Gemini, l'upscale régénère chaque image en 4K : vérifiez qu'aucun détail n'a changé.")
+    code = run_jobs(settings, etapes.upscale_jobs(project, sources), args)
     if args.apply and code == 0:
         print(f"Ensuite : python -m rendu_ia video \"{project.root}\"")
     return code
@@ -225,8 +247,12 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
     sources = existing_files(args.fichiers) if args.fichiers else etapes.default_video_sources(project)
     if not sources:
         raise ConfigError("Aucune image à animer : lancez d'abord « storyboard » ou « rendus ».")
-    print(f"Modèle vidéo : {settings.video_name} ({settings.video.endpoint})")
-    code = run_jobs(settings, etapes.video_jobs(project, settings, sources, args.mouvement), args)
+    if not settings.fal_key:
+        sheet = etapes.write_flow_sheet(project, sources, args.mouvement)
+        print(f"Pas de clé fal.ai : les vidéos se font dans Flow, inclus dans l'abonnement Google AI Pro.\n"
+              f"Fiche à suivre, avec l'image et le texte de chacun des {len(sources)} plan(s) : {sheet}")
+        return 0
+    code = run_jobs(settings, etapes.video_jobs(project, settings, sources, args.mouvement), args, video=True)
     if args.apply and code == 0:
         print(f"Vidéos dans {project.output / 'videos'} : il reste à les monter (Clipchamp, CapCut, Premiere...).")
     return code
