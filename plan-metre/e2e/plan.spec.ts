@@ -500,8 +500,10 @@ test('textes du plan lisibles : cote active, étiquette d’une petite pièce, c
   const coin0 = await versEcran(page, { x: 600, y: 300 });
   const coin1 = await versEcran(page, { x: 900, y: 480 });
   const bs = (await page.locator(`[data-etiquette="${idSdb}"]`).boundingBox())!;
-  expect(bs.x).toBeGreaterThanOrEqual(coin0.x);
-  expect(bs.x + bs.width).toBeLessThanOrEqual(coin1.x);
+  // Marge de 2 px : la largeur des textes varie d'une machine à l'autre selon les polices installées.
+  const MARGE_POLICE = 2;
+  expect(bs.x).toBeGreaterThanOrEqual(coin0.x - MARGE_POLICE);
+  expect(bs.x + bs.width).toBeLessThanOrEqual(coin1.x + MARGE_POLICE);
 
   // Aucune cote sous l'arc de la porte du salon.
   const arc = (await page.locator('.plan2d-ouverture-arc').first().boundingBox())!;
