@@ -366,6 +366,8 @@ test('outils ouverture et équipement : tous les types se voient sans défiler',
     const types = page.getByRole('group', { name: groupe });
     const boutons = types.getByRole('button');
     await expect(boutons).toHaveCount(nombre);
+    // La feuille monte en 0,2 s : on mesure une fois l'animation terminée.
+    await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
     const boite = (await types.boundingBox())!;
     for (const b of await boutons.all()) {
       const bb = (await b.boundingBox())!;
@@ -400,6 +402,8 @@ test('la feuille de propriétés laisse la barre du bas utilisable, même au ret
   await page.getByRole('button', { name: 'Plan 2D' }).click();
   await expect(titre).toBeVisible();
   const nav = page.locator('.nav-bas');
+  // La feuille monte en 0,2 s : on vérifie une fois l'animation terminée.
+  await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running'));
   for (const nom of ['Photos', 'Ajouter une pièce', 'Métré']) {
     const bb = (await nav.getByRole('button', { name: nom }).boundingBox())!;
     const libre = await page.evaluate(
