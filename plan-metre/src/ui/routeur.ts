@@ -8,7 +8,7 @@
 //   #/chantier/<id>/parametres      réglages du chantier
 
 import { useSyncExternalStore } from 'react';
-import { prendreEntreesCouches } from './commun/retour';
+import { prendreEntreesCouches, remonter } from './commun/retour';
 
 export type Route =
   | { ecran: 'accueil' }
@@ -71,10 +71,9 @@ export function naviguer(r: Route, options: { remplacer?: boolean } = {}): void 
  * d'Android ne repasse ainsi pas par les écrans déjà quittés.
  */
 export function revenir(r: Route): void {
-  const restes = prendreEntreesCouches();
   const depuis = (history.state as EtatHistorique | null)?.abseDepuis;
-  if (depuis !== undefined && depuis === cheminRoute(r)) history.go(-(1 + restes));
-  else naviguer(r, { remplacer: true });
+  if (depuis !== undefined && depuis === cheminRoute(r) && remonter(1)) return;
+  naviguer(r, { remplacer: true });
 }
 
 function abonner(rappel: () => void) {

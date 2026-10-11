@@ -413,8 +413,9 @@ test('réalité augmentée (session simulée) : après une rupture du repère, l
   await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(2);
   await page.getByRole('button', { name: 'Finaliser la capture' }).click();
   await page.getByRole('button', { name: 'Sauvegarder et continuer' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  await expect.poll(async () => (await piecesRdc(page)).pieces.length).toBe(2);
   const { pieces } = await piecesRdc(page);
-  expect(pieces).toHaveLength(2);
   // Deux groupes distincts : ils ne gardent pas l'écart (faux) de 16 m entre les deux repères.
   const [a, b] = pieces.map((p) => boite(p.sommets));
   const ecart = Math.max(b.minX - a.maxX, a.minX - b.maxX, b.minY - a.maxY, a.minY - b.maxY);
@@ -545,8 +546,14 @@ test('trente pièces relevées : rangées lisibles sur le plan, aperçu sans nom
   await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
   const { pieces } = await piecesRdc(page);
   expect(pieces).toHaveLength(30);
-  // Plan : rangées à la forme de l'écran, chaque pièce nommée sans avoir à zoomer.
-  await expect(page.locator('[data-etiquette]')).toHaveCount(30);
+  // Plan : rangées compactes à la forme de l'écran (et non une bande de 143 m de long).
+  // L'éditeur masque les noms trop grands pour leur pièce à ce zoom ; ils réapparaissent en zoomant.
+  const xs = pieces.flatMap((p) => p.sommets.map((s) => s.x));
+  const ys = pieces.flatMap((p) => p.sommets.map((s) => s.y));
+  const rapport = (Math.max(...xs) - Math.min(...xs)) / (Math.max(...ys) - Math.min(...ys));
+  expect(rapport).toBeGreaterThan(0.2);
+  expect(rapport).toBeLessThan(3);
+  await expect(page.locator('[data-etiquette]').first()).toBeVisible();
 });
 
 test('finalisation de trente pièces : la saisie d’un nom reste fluide', async ({ page, browserName }, info) => {

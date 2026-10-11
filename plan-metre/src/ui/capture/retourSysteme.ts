@@ -11,6 +11,7 @@
 // encore la garde.
 
 import { useEffect, useRef } from 'react';
+import { remonter } from '../commun/retour';
 
 const CLE = 'abseReleve';
 
@@ -19,7 +20,8 @@ function estGarde(etat: unknown): boolean {
 }
 
 function poserGarde() {
-  history.pushState({ [CLE]: true }, '');
+  // On garde l'état de l'entrée du relevé (provenance, pour revenir()).
+  history.pushState({ ...(history.state as object | null), [CLE]: true }, '');
 }
 
 /**
@@ -53,9 +55,7 @@ export function useRetourSysteme(surRetour: (() => void) | null): void {
  * ouverte directement).
  */
 export function quitterParRetour(repli: () => void): void {
-  const pas = estGarde(history.state) ? 2 : 1;
-  const navigation = (window as { navigation?: { currentEntry?: { index: number } | null } }).navigation;
-  const index = navigation?.currentEntry?.index;
-  if (index !== undefined && index < pas) repli();
-  else history.go(-pas);
+  // Les entrées de feuilles et dialogues posées au-dessus de la garde en
+  // reprennent l'état : estGarde() dit s'il y a une garde sous elles.
+  if (!remonter(estGarde(history.state) ? 2 : 1)) repli();
 }

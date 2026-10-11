@@ -17,6 +17,8 @@ const pile: Couche[] = [];
 let retraitPrevu: ReturnType<typeof setTimeout> | null = null;
 /** Retours d'historique lancés par nous-mêmes (retrait d'entrée), pas par l'utilisateur. */
 let retoursInternes = 0;
+/** Sortie d'écran par l'historique en cours (cf. remonter) : ses entrées partent avec elle. */
+let sortieEnCours = false;
 
 function profondeurDeLEtat(etat: unknown): number {
   const p = (etat as { abseCouche?: unknown } | null)?.abseCouche;
@@ -26,6 +28,12 @@ function profondeurDeLEtat(etat: unknown): number {
 if (typeof window !== 'undefined') {
   window.addEventListener('popstate', (e) => {
     const p = profondeurDeLEtat(e.state);
+    if (sortieEnCours) {
+      sortieEnCours = false;
+      retoursInternes = 0;
+      while (pile.length > p) pile.pop()!.fermer();
+      return;
+    }
     if (retoursInternes > 0) {
       // Notre propre retrait d'entrée : rien à fermer. Si une couche s'est
       // ouverte entre-temps, ce retour a emporté son entrée : on la lui rend.
@@ -65,14 +73,14 @@ export function useRetourSysteme(ouvert: boolean, fermer: () => void): void {
     return () => {
       const i = pile.indexOf(couche);
       if (i >= 0) pile.splice(i, 1);
-      if (fermeeParRetour || profondeurDeLEtat(history.state) !== profondeur) return;
+      if (fermeeParRetour || sortieEnCours || profondeurDeLEtat(history.state) !== profondeur) return;
       // Fermée par un bouton : on retire l'entrée ajoutée, un peu plus tard pour
       // laisser une autre couche la reprendre, et pas si l'on a changé d'écran
       // entre-temps (l'entrée courante n'est alors plus la nôtre).
       if (retraitPrevu !== null) clearTimeout(retraitPrevu);
       retraitPrevu = setTimeout(() => {
         retraitPrevu = null;
-        if (pile.length < profondeur && profondeurDeLEtat(history.state) === profondeur) {
+        if (!sortieEnCours && pile.length < profondeur && profondeurDeLEtat(history.state) === profondeur) {
           retoursInternes++;
           history.back();
         }
@@ -93,4 +101,24 @@ export function prendreEntreesCouches(): number {
     retraitPrevu = null;
   }
   return Math.max(0, profondeurDeLEtat(history.state) - pile.length);
+}
+
+/**
+ * Quitte l'écran courant par l'historique en remontant `pas` entrées d'écran
+ * (1 = l'écran précédent), en sautant d'abord les entrées des feuilles,
+ * menus et dialogues posées au-dessus. Rend false si l'historique de
+ * l'onglet ne remonte pas assez loin (adresse ouverte directement).
+ */
+export function remonter(pas: number): boolean {
+  const total = profondeurDeLEtat(history.state) + pas;
+  const navigation = (window as { navigation?: { currentEntry?: { index: number } | null } }).navigation;
+  const index = navigation?.currentEntry?.index;
+  if (index !== undefined && index < total) return false;
+  if (retraitPrevu !== null) {
+    clearTimeout(retraitPrevu);
+    retraitPrevu = null;
+  }
+  sortieEnCours = true;
+  history.go(-total);
+  return true;
 }
