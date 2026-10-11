@@ -1,0 +1,141 @@
+/* Vue 3D du plan (module plan3d). */
+
+.vue3d {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--fond);
+}
+
+.vue3d-zone {
+  position: absolute;
+  inset: 0;
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.vue3d-zone:focus-visible {
+  /* Contour dessiné par-dessus le canevas (une ombre intérieure serait cachée dessous). */
+  outline: 3px solid color-mix(in srgb, var(--primaire) 55%, transparent);
+  outline-offset: -3px;
+}
+
+.vue3d-canevas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: grab;
+}
+
+.vue3d-canevas:active {
+  cursor: grabbing;
+}
+
+/* Étiquettes des pièces, posées au sol et suivant la caméra. */
+.vue3d-etiquettes {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.vue3d-etiquette {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3px 10px 4px;
+  border-radius: var(--rayon-petit);
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 1px 4px rgba(27, 33, 64, 0.14);
+  line-height: 1.2;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.vue3d-etiquette-nom {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--texte);
+}
+
+.vue3d-etiquette-surface {
+  font-size: 12px;
+  color: var(--texte-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sous le bouton 2D / 3D de la coque (top: 10px, 44 px de haut). */
+.vue3d-recentrer {
+  position: absolute;
+  top: 64px;
+  right: 10px;
+  z-index: 10;
+}
+
+/* Consigne des gestes, au-dessus de la pilule « Plan actuel / Plan rénové ». */
+.vue3d-aide {
+  position: absolute;
+  left: 50%;
+  bottom: 68px;
+  z-index: 5;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: var(--rayon-pilule);
+  background: rgba(27, 33, 64, 0.72);
+  color: #fff;
+  font-size: 13px;
+  text-align: center;
+  pointer-events: none;
+}
+
+/* N'apparaît que si le chargement du module 3D traîne. */
+.vue3d-chargement {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  color: var(--texte-2);
+  pointer-events: none;
+  animation: vue3d-apparaitre 0.2s ease-out 0.4s both;
+}
+
+@keyframes vue3d-apparaitre {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.vue3d-message {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px 64px;
+  pointer-events: none;
+}
+
+.vue3d-message .vide {
+  max-width: 360px;
+  border-radius: var(--rayon);
+  background: color-mix(in srgb, var(--fond) 88%, transparent);
+}
+
+.vue3d-message p {
+  margin: 0;
+}

@@ -1,0 +1,622 @@
+/* Écran Métré — présentation à la Visuary : titres de section en petites
+   capitales, libellé à gauche, valeur alignée à droite en chiffres tabulaires. */
+
+/* ─── Contrôles (plan présenté, onglets) ─────────────────────────────── */
+
+.metre-controles {
+  display: flex;
+  justify-content: center;
+  padding: 8px 16px 4px;
+  background: var(--surface);
+}
+
+.metre-controles .segments {
+  display: flex;
+  width: 100%;
+  max-width: 480px;
+}
+
+.metre-controles .segments button {
+  flex: 1;
+  min-height: 40px;
+  padding: 0 8px;
+}
+
+.metre-onglets {
+  position: relative;
+  z-index: 10;
+}
+
+@media (min-width: 760px) {
+  .metre-onglets {
+    padding: 0 calc((100% - 720px) / 2);
+  }
+}
+
+/* ─── Page ───────────────────────────────────────────────────────────── */
+
+.metre-contenu {
+  padding-top: 4px;
+}
+
+.metre-page {
+  max-width: 720px;
+  margin: 0 auto;
+  border-radius: var(--rayon);
+}
+
+.metre-panneau:focus-visible {
+  outline-offset: 4px;
+}
+
+.metre-impression {
+  display: none;
+}
+
+.metre-avis {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--rayon);
+  background: var(--primaire-clair);
+  color: var(--primaire-fonce);
+  font-size: 14px;
+}
+
+.metre-avis > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.metre-avis p {
+  margin: 0;
+}
+
+.metre-avis-bouton {
+  margin: 2px 0 -6px -12px;
+}
+
+.metre-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 4px 0;
+  font-size: 13px;
+  color: var(--texte-2);
+}
+
+.metre-note svg {
+  flex: none;
+  color: var(--texte-3);
+}
+
+.metre-vide-texte {
+  margin: 0 0 16px;
+}
+
+/* ─── Synthèse (onglet Global) ───────────────────────────────────────── */
+
+.metre-synthese {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 16px 18px;
+  background: var(--surface);
+  border-radius: var(--rayon);
+  box-shadow: var(--ombre);
+}
+
+.metre-chiffre {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.metre-chiffre.secondaire {
+  align-items: flex-end;
+  text-align: right;
+}
+
+.metre-chiffre-libelle {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--texte-3);
+}
+
+.metre-chiffre-valeur {
+  font-size: 30px;
+  font-weight: 750;
+  line-height: 1.1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--primaire-fonce);
+}
+
+.metre-chiffre.secondaire .metre-chiffre-valeur {
+  font-size: 24px;
+  color: var(--texte);
+}
+
+.metre-synthese-comparee {
+  margin-top: 12px;
+}
+
+/* ─── Blocs (niveau) et cartes (pièce) ───────────────────────────────── */
+
+.metre-bloc {
+  margin-top: 18px;
+}
+
+.metre-bloc + .metre-bloc {
+  margin-top: 30px;
+}
+
+.metre-bloc-entete {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0 4px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--bordure);
+}
+
+.metre-bloc-titre {
+  font-size: 20px;
+  font-weight: 750;
+}
+
+.metre-bloc-resume {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--texte-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.metre-pieces-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin: 6px 0 -10px;
+}
+
+.metre-carte {
+  margin-top: 12px;
+  background: var(--surface);
+  border-radius: var(--rayon);
+  box-shadow: var(--ombre);
+  overflow: hidden;
+}
+
+.metre-carte-entete {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+  padding: 4px 4px 4px 0;
+}
+
+.metre-carte-nom {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 6px 0 16px;
+  border: none;
+  border-radius: 0 12px 12px 0;
+  background: transparent;
+  text-align: left;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--texte);
+}
+
+.metre-carte-nom-texte {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metre-carte-nom svg {
+  flex: none;
+  color: var(--primaire);
+}
+
+.metre-carte-nom:hover .metre-carte-nom-texte {
+  color: var(--primaire);
+  text-decoration: underline;
+}
+
+.metre-carte-resume {
+  flex: none;
+  font-weight: 650;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--texte-2);
+}
+
+.metre-carte-resume.non-nul {
+  color: var(--primaire-fonce);
+}
+
+.metre-carte-bascule svg {
+  transition: transform 0.15s;
+}
+
+.metre-carte-bascule[aria-expanded='false'] svg {
+  transform: rotate(-90deg);
+}
+
+.metre-badge-supprimee {
+  background: var(--danger-clair);
+  color: var(--danger);
+}
+
+.metre-carte-corps {
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--bordure);
+}
+
+/* Dans une carte de pièce, les tableaux sont à plat (pas de carte dans la carte). */
+.metre-carte .metre-tableau-cadre {
+  box-shadow: none;
+  border: 1px solid var(--bordure);
+}
+
+.metre-carte .metre-section-titre {
+  margin-top: 14px;
+}
+
+/* ─── Sections et tableaux de quantités ──────────────────────────────── */
+
+.metre-section-titre {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  margin: 22px 4px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--texte-3);
+}
+
+.metre-section-sous-titre {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--texte-2);
+}
+
+.metre-section-sous-titre::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--texte-3);
+}
+
+.metre-tableau-cadre {
+  background: var(--surface);
+  border-radius: var(--rayon);
+  box-shadow: var(--ombre);
+  overflow: hidden;
+}
+
+.metre-tableau {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.metre-tableau th,
+.metre-tableau td {
+  padding: 12px 14px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.metre-tableau tbody tr + tr > * {
+  border-top: 1px solid var(--bordure);
+}
+
+.metre-libelle {
+  width: 100%;
+  min-height: 48px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.metre-precision {
+  display: block;
+  margin-top: 1px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--texte-2);
+}
+
+.metre-tableau .metre-valeur {
+  text-align: right;
+  white-space: nowrap;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.metre-valeur.absente {
+  font-weight: 400;
+  color: var(--texte-3);
+}
+
+.metre-ligne-forte .metre-libelle,
+.metre-ligne-forte .metre-valeur {
+  font-weight: 750;
+}
+
+/* Comparaison : colonnes Actuel | Rénové | Écart */
+.metre-tableau.comparaison thead th {
+  padding-top: 8px;
+  padding-bottom: 8px;
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  text-align: right;
+  color: var(--texte-2);
+  white-space: nowrap;
+}
+
+.metre-tableau.comparaison th,
+.metre-tableau.comparaison td {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+
+.metre-tableau.comparaison tr > :first-child {
+  padding-left: 14px;
+}
+
+.metre-tableau.comparaison tr > :last-child {
+  padding-right: 10px;
+}
+
+.metre-tableau.comparaison .metre-libelle {
+  width: auto;
+  font-size: 14px;
+}
+
+.metre-tableau.comparaison .metre-valeur {
+  font-size: 14px;
+  font-weight: 550;
+}
+
+.metre-ecart {
+  color: var(--texte-3);
+}
+
+.metre-ecart span {
+  display: inline-block;
+  min-width: 20px;
+  text-align: center;
+}
+
+.metre-ecart.non-nul span {
+  padding: 2px 5px;
+  margin-right: -4px;
+  border-radius: var(--rayon-pilule);
+  background: var(--primaire-clair);
+  color: var(--primaire-fonce);
+  font-weight: 750;
+}
+
+/* Largeurs fixes : les colonnes restent alignées d'une section à l'autre. */
+.metre-tableau.comparaison tr > :nth-child(2),
+.metre-tableau.comparaison tr > :nth-child(3) {
+  width: 6em;
+}
+
+.metre-tableau.comparaison tr > :nth-child(4) {
+  width: 7em;
+}
+
+@media (max-width: 480px) {
+  .metre-tableau.comparaison .metre-libelle,
+  .metre-tableau.comparaison .metre-valeur {
+    font-size: 13px;
+  }
+}
+
+@media (min-width: 600px) {
+  .metre-tableau.comparaison tr > :nth-child(2),
+  .metre-tableau.comparaison tr > :nth-child(3) {
+    width: 8em;
+  }
+
+  .metre-tableau.comparaison tr > :nth-child(4) {
+    width: 8.5em;
+  }
+}
+
+/* ─── Guide ──────────────────────────────────────────────────────────── */
+
+.metre-guide-intro {
+  margin: 0 0 12px;
+  color: var(--texte-2);
+}
+
+.metre-guide-regles {
+  margin: 0;
+}
+
+.metre-guide-regle {
+  padding: 10px 0;
+  border-top: 1px solid var(--bordure);
+}
+
+.metre-guide-regle dt {
+  font-weight: 700;
+}
+
+.metre-guide-regle dd {
+  margin: 2px 0 0;
+  color: var(--texte-2);
+  font-size: 15px;
+}
+
+.metre-guide-titre {
+  margin: 18px 0 8px;
+  font-size: 16px;
+}
+
+.metre-guide-reglages {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--texte-2);
+  font-size: 15px;
+}
+
+.metre-guide-reglages li + li {
+  margin-top: 6px;
+}
+
+.metre-guide-reglages strong {
+  color: var(--texte);
+}
+
+.metre-guide-etat {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--rayon-petit);
+  background: var(--primaire-clair);
+  color: var(--primaire-fonce);
+  font-size: 14px;
+}
+
+/* ─── Impression / PDF : noir et blanc, tout déplié, sans boutons ────── */
+
+@media print {
+  @page {
+    margin: 14mm 12mm;
+  }
+
+  html:has(.metre-ecran),
+  body:has(.metre-ecran),
+  body:has(.metre-ecran) #root {
+    height: auto;
+    background: #fff;
+  }
+
+  .metre-ecran {
+    display: block;
+    height: auto;
+    font-size: 12pt;
+  }
+
+  .metre-ecran .ecran-contenu {
+    overflow: visible;
+    padding: 0;
+  }
+
+  .metre-ecran,
+  .metre-ecran * {
+    color: #000 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+
+  .metre-controles,
+  .metre-onglets,
+  .metre-carte-bascule,
+  .metre-carte-nom svg,
+  body:has(.metre-ecran) .toast,
+  body:has(.metre-guide) .voile,
+  .feuille:has(.metre-guide) {
+    display: none !important;
+  }
+
+  .metre-page {
+    max-width: none;
+  }
+
+  .metre-impression {
+    display: block;
+    margin-bottom: 4mm;
+    padding-bottom: 3mm;
+    border-bottom: 2px solid #000;
+  }
+
+  .metre-impression h1 {
+    font-size: 18pt;
+    margin-bottom: 2mm;
+  }
+
+  .metre-impression p {
+    margin: 0;
+    font-size: 11pt;
+  }
+
+  .metre-avis {
+    padding: 2mm 3mm;
+    border: 1px solid #000;
+  }
+
+  .metre-avis > svg {
+    display: none;
+  }
+
+  .metre-carte-corps[hidden] {
+    display: block !important;
+  }
+
+  .metre-synthese,
+  .metre-tableau-cadre,
+  .metre-carte {
+    border: 1px solid #888;
+    border-radius: 6px;
+  }
+
+  .metre-carte .metre-tableau-cadre {
+    border: none;
+  }
+
+  .metre-carte-corps {
+    border-top-color: #888;
+  }
+
+  .metre-bloc-entete {
+    border-bottom-color: #000;
+  }
+
+  .metre-tableau tbody tr + tr > * {
+    border-top-color: #bbb;
+  }
+
+  .metre-tableau.comparaison thead th {
+    border-bottom: 1px solid #888;
+  }
+
+  .metre-ecart.non-nul span,
+  .metre-ecran .badge {
+    border: 1px solid #000;
+  }
+
+  .metre-section,
+  .metre-synthese,
+  .metre-carte-entete {
+    break-inside: avoid;
+  }
+
+  .metre-section-titre,
+  .metre-bloc-entete,
+  .metre-carte-entete {
+    break-after: avoid;
+  }
+}
