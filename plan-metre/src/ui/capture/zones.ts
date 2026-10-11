@@ -1,6 +1,7 @@
 // Zones relevées (réalité augmentée, mètre laser, rectangle) et leur
-// assemblage sur le plan : alignement, redressement des angles, placement à
-// côté des pièces existantes, création des pièces. Longueurs en cm.
+// assemblage sur le plan : alignement, redressement des angles, placement en
+// rangées compactes près des pièces existantes, création des pièces.
+// Longueurs en cm.
 
 import { nouvelId, nouvellePiece } from '../../model/fabrique';
 import type { Catalogue, ID, Piece, Point } from '../../model/types';
@@ -73,10 +74,14 @@ export function zoneLaser(points: readonly Point[], hauteur: number, nom = ''): 
   return { id: nouvelId(), methode: 'laser', nom, points: points.map((p) => ({ x: p.x, y: p.y })), hauteur };
 }
 
-/** Zones d'une session de réalité augmentée (même repère, identifiant de session commun). */
+/**
+ * Zones d'une session de réalité augmentée (même repère, identifiant de
+ * session commun). L'identifiant de chaque zone est stable : la même zone
+ * convertie à nouveau (après une correction des ancres) remplace la première.
+ */
 export function zonesDepuisRA(zones: readonly ZoneTermineeRA[], sessionRA: string): ZoneRelevee[] {
   return zones.map((z) => ({
-    id: nouvelId(),
+    id: `${sessionRA}-${z.id}`,
     methode: 'ra',
     nom: '',
     points: anglesEnPlan(z.angles),
@@ -159,8 +164,10 @@ export function preparerContour(points: readonly Point[], redresser: boolean): P
 export interface OptionsPlacement {
   /** Redresser les angles proches de 90°. */
   redresser: boolean;
-  /** Boîte englobante des pièces déjà présentes sur le plan cible (null si le plan est vide). */
-  existant: Boite | null;
+  /** Boîtes englobantes des pièces déjà présentes sur le plan cible (vide si le plan est vide). */
+  existantes: readonly Boite[];
+  /** Rapport largeur / hauteur visé pour l'ensemble (celui de l'écran du plan) ; 1 par défaut. */
+  rapport?: number;
   marge?: number;
 }
 
@@ -170,22 +177,67 @@ export interface ZonePlacee {
   points: Point[];
 }
 
+function seChevauchent(a: Boite, b: Boite, marge: number): boolean {
+  return a.minX < b.maxX + marge && b.minX < a.maxX + marge && a.minY < b.maxY + marge && b.minY < a.maxY + marge;
+}
+
+/**
+ * Emplacement libre le plus haut, puis le plus à gauche, pour une boîte
+ * l × h : à `marge` au moins de toutes les boîtes occupées, sans dépasser la
+ * largeur de rangée visée. Les positions essayées sont l'origine et les bords
+ * droit et bas (marge comprise) des boîtes occupées.
+ */
+function emplacementLibre(l: number, h: number, occupees: readonly Boite[], origine: Point, largeurRangee: number, marge: number): Point {
+  const xs = [origine.x, ...occupees.map((b) => b.maxX + marge)].filter((x) => x >= origine.x).sort((a, b) => a - b);
+  const ys = [origine.y, ...occupees.map((b) => b.maxY + marge)].filter((y) => y >= origine.y).sort((a, b) => a - b);
+  for (const y of ys) {
+    for (const x of xs) {
+      if (x > origine.x && x + l > origine.x + largeurRangee) break;
+      const boite = { minX: x, minY: y, maxX: x + l, maxY: y + h };
+      if (!occupees.some((b) => seChevauchent(boite, b, marge))) return { x, y };
+    }
+  }
+  // Toujours libre : sous toutes les boîtes, au début de la rangée.
+  return { x: origine.x, y: ys[ys.length - 1] };
+}
+
+const largeur = (b: Boite) => b.maxX - b.minX;
+const hauteur = (b: Boite) => b.maxY - b.minY;
+
+function englobante(boites: readonly Boite[]): Boite {
+  return boiteEnglobante(boites.flatMap((b) => [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.maxY }]));
+}
+
+/** Pose les boîtes l'une après l'autre dans les places libres, en rangées de la largeur donnée. */
+function disposer(tailles: readonly Boite[], existantes: readonly Boite[], origine: Point, largeurRangee: number, marge: number): Boite[] {
+  const occupees = [...existantes];
+  return tailles.map((t) => {
+    const p = emplacementLibre(largeur(t), hauteur(t), occupees, origine, largeurRangee, marge);
+    const b = { minX: p.x, minY: p.y, maxX: p.x + largeur(t), maxY: p.y + hauteur(t) };
+    occupees.push(b);
+    return b;
+  });
+}
+
 /**
  * Pose les zones sur le plan :
  *  - les zones d'une même session de réalité augmentée gardent leurs
  *    positions relatives ; le groupe tourne pour aligner le plus long côté
  *    de sa première zone sur l'axe x ;
- *  - les zones laser / rectangle sont posées côte à côte ;
- *  - le premier groupe se place à droite des pièces existantes (marge),
- *    aligné sur leur haut, ou à l'origine si le plan est vide.
+ *  - les groupes (session de réalité augmentée, ou zone seule) sont rangés
+ *    en rangées à partir du coin haut gauche des pièces existantes (ou de
+ *    l'origine), dans les places libres, à `marge` les uns des autres et des
+ *    pièces existantes ;
+ *  - la largeur des rangées est choisie pour que l'ensemble, existant
+ *    compris, tienne le plus grand possible dans un écran du rapport visé :
+ *    avec beaucoup de pièces, le plan reste lisible sans zoomer, y compris
+ *    quand on les ajoute une à une.
  * Le résultat suit l'ordre des zones reçues.
  */
 export function placerZones(zones: readonly ZoneRelevee[], options: OptionsPlacement): ZonePlacee[] {
   const marge = options.marge ?? MARGE_PLACEMENT_CM;
-  const resultat = new Map<string, Point[]>();
-  let curseurX = options.existant ? options.existant.maxX + marge : 0;
-  const haut = options.existant ? options.existant.minY : 0;
-  for (const groupe of grouperZones(zones)) {
+  const rapport = options.rapport ?? 1;
+  const groupes = grouperZones(zones).flatMap((groupe) => {
     const rotation = groupe[0].methode === 'ra' ? angleAlignement(groupe[0].points) : 0;
     const contours = groupe.map((z) =>
       preparerContour(
@@ -194,25 +246,56 @@ export function placerZones(zones: readonly ZoneRelevee[], options: OptionsPlace
       ),
     );
     const tous = contours.flat();
-    if (tous.length === 0) continue;
-    const b = boiteEnglobante(tous);
-    const dx = curseurX - b.minX;
-    const dy = haut - b.minY;
+    return tous.length > 0 ? [{ groupe, contours, boite: boiteEnglobante(tous) }] : [];
+  });
+  if (groupes.length === 0) return [];
+
+  const existantes = options.existantes;
+  const existant = existantes.length > 0 ? englobante(existantes) : null;
+  const origine = existant ? { x: existant.minX, y: existant.minY } : { x: 0, y: 0 };
+  const tailles = groupes.map((g) => g.boite);
+  // Largeurs de rangée essayées : la plus étroite (l'existant, ou le plus
+  // large groupe), puis élargie d'un groupe à la fois, jusqu'au double de la
+  // largeur d'un rectangle du rapport visé de même surface (marges comprises).
+  const surface = [...existantes, ...tailles].reduce((s, b) => s + (largeur(b) + marge) * (hauteur(b) + marge), 0);
+  let l = Math.max(existant ? largeur(existant) : 0, ...tailles.map(largeur));
+  const largeurs = [l];
+  for (const t of tailles) {
+    l += largeur(t) + marge;
+    if (l > 2 * Math.sqrt(surface * rapport)) break;
+    largeurs.push(l);
+  }
+  // Retenue : celle qui s'affiche le plus grand dans un écran du rapport visé
+  // (à égalité, la moins étendue).
+  let meilleure: { poses: Boite[]; cote: number; aire: number } | null = null;
+  for (const largeurRangee of largeurs) {
+    const poses = disposer(tailles, existantes, origine, largeurRangee, marge);
+    const tout = englobante([...existantes, ...poses]);
+    const cote = Math.max(largeur(tout) / rapport, hauteur(tout));
+    const aire = largeur(tout) * hauteur(tout);
+    if (!meilleure || cote < meilleure.cote - 1e-6 || (cote < meilleure.cote + 1e-6 && aire < meilleure.aire - 1e-6)) {
+      meilleure = { poses, cote, aire };
+    }
+  }
+  const poses = meilleure!.poses;
+
+  const resultat = new Map<string, Point[]>();
+  groupes.forEach(({ groupe, contours, boite: b }, k) => {
+    const dx = poses[k].minX - b.minX;
+    const dy = poses[k].minY - b.minY;
     groupe.forEach((z, i) => {
       resultat.set(
         z.id,
         contours[i].map((p) => ({ x: arrondirCm(p.x + dx), y: arrondirCm(p.y + dy) })),
       );
     });
-    curseurX += b.maxX - b.minX + marge;
-  }
+  });
   return zones.filter((z) => resultat.has(z.id)).map((z) => ({ zone: z, points: resultat.get(z.id)! }));
 }
 
-/** Boîte englobante des pièces (contours extérieurs, murs compris), null s'il n'y en a pas. */
-export function boiteDesPieces(pieces: readonly Piece[], catalogue: Catalogue): Boite | null {
-  const points = pieces.filter((p) => p.sommets.length >= 3).flatMap((p) => contourExterieur(p, catalogue));
-  return points.length > 0 ? boiteEnglobante(points) : null;
+/** Boîtes englobantes de chaque pièce (contours extérieurs, murs compris). */
+export function boitesDesPieces(pieces: readonly Piece[], catalogue: Catalogue): Boite[] {
+  return pieces.filter((p) => p.sommets.length >= 3).map((p) => boiteEnglobante(contourExterieur(p, catalogue)));
 }
 
 /** « Pièce 1 », « Pièce 2 »… en évitant les noms déjà pris. */

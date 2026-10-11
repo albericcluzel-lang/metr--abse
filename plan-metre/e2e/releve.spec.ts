@@ -182,19 +182,57 @@ async function simulerSessionRA(page: Page) {
           session.visee = p;
           rappels.surVisee({ point: p, suivi: true, estime: false });
         },
+        /** Corrections des ancres par le suivi. */
+        ajuster(corrections: unknown) {
+          rappels.surAjustement(corrections);
+        },
+        /** Événement « reset » de l'espace de référence. */
+        rupture() {
+          rappels.surRuptureRepere();
+        },
       };
       return session;
     };
   });
 }
 
-test('réalité augmentée (session simulée) : deux pièces dans le même repère', async ({ page }) => {
+/** Navigateur compatible WebXR (la session elle-même est simulée par simulerSessionRA). */
+async function simulerNavigateurRA(page: Page) {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, 'xr', {
       configurable: true,
       value: { isSessionSupported: async () => true, requestSession: async () => Promise.reject(new Error('non simulé')) },
     });
   });
+}
+
+/** Démarre une session simulée et renvoie la fonction de visée (m, repère de la session). */
+async function demarrerSessionRA(page: Page) {
+  await simulerSessionRA(page);
+  await page.getByRole('button', { name: 'Réalité augmentée' }).click();
+  await page.getByRole('button', { name: 'Démarrer la réalité augmentée' }).click();
+  await expect(page.getByRole('button', { name: 'Placer un angle' })).toBeVisible();
+  return (x: number, z: number, y = -1.4) => page.evaluate((p) => (window as any).__ra.viser(p), { x, y, z });
+}
+
+/** Relève une pièce (angles au sol, hauteur saisie) et termine la zone. */
+async function releverPieceRA(page: Page, viser: (x: number, z: number) => Promise<unknown>, angles: number[][]) {
+  for (const [x, z] of angles) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  await page.getByRole('button', { name: 'Fermer la pièce' }).click();
+  await page.getByRole('button', { name: 'Saisir la hauteur' }).click();
+  await page.getByRole('button', { name: 'Valider', exact: true }).click();
+  await page.getByRole('button', { name: 'Terminer la zone' }).click();
+}
+
+function lireBrouillon(page: Page, id: string): Promise<{ zones: { sessionRA?: string; points: { x: number; y: number }[] }[] } | null> {
+  return page.evaluate((id) => JSON.parse(sessionStorage.getItem(`abse-releve-${id}`) ?? 'null'), id);
+}
+
+test('réalité augmentée (session simulée) : deux pièces dans le même repère', async ({ page }) => {
+  await simulerNavigateurRA(page);
   const id = await creerChantier(page, 'RA simulée');
   await page.goto(`./#/chantier/${id}/releve`);
   await simulerSessionRA(page);
@@ -305,4 +343,300 @@ test('réalité augmentée : refus de la caméra expliqué en français', async 
   // On peut revenir et choisir une autre méthode.
   await page.getByRole('button', { name: 'Retour' }).click();
   await expect(page.getByRole('button', { name: 'Mètre laser' })).toBeVisible();
+});
+
+test('réalité augmentée (session simulée) : chaque zone terminée est protégée sans attendre la fin de la session', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'RA rechargée');
+  await page.goto(`./#/chantier/${id}/releve`);
+  const viser = await demarrerSessionRA(page);
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await expect(page.getByText('Zone 1 terminée')).toBeVisible();
+  // Toujours en session : la zone est déjà dans le brouillon…
+  expect((await lireBrouillon(page, id))?.zones).toHaveLength(1);
+  // … et y suit les corrections du suivi (angle 2 déplacé de 20 cm).
+  await page.evaluate(() => (window as any).__ra.ajuster([{ id: 2, point: { x: 4.2, y: -1.4, z: 0 } }]));
+  await expect.poll(async () => (await lireBrouillon(page, id))?.zones.map((z) => z.points[1].x)).toEqual([420]);
+
+  // Rechargement en pleine session (mise à jour de l'appli, onglet tué par Android).
+  await page.reload();
+  await expect(page.getByText('Relevé en cours retrouvé : 1 zone')).toBeVisible();
+  const zones = page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem');
+  await expect(zones).toHaveCount(1);
+  await expect(zones.first()).toContainText('12,30 m²');
+  await expect(zones.first()).toContainText('Réalité augmentée');
+});
+
+test('réalité augmentée (session simulée) : après une rupture du repère, les pièces suivantes sont placées à part', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'RA rupture');
+  await page.goto(`./#/chantier/${id}/releve`);
+  const viser = await demarrerSessionRA(page);
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await page.getByRole('button', { name: 'Relever une autre pièce' }).click();
+  // Deux angles posés, puis le suivi déplace son repère.
+  for (const [x, z] of [
+    [4.1, 0],
+    [7, 0],
+  ]) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  await page.evaluate(() => (window as any).__ra.rupture());
+  await expect(page.getByRole('alert')).toContainText('Le suivi a perdu ses repères.');
+  await expect(page.getByRole('alert')).toContainText('2 angles de la pièce en cours n’ont pas pu être gardés');
+  await expect(page.getByText('Aucun angle placé')).toBeVisible();
+
+  // La pièce suivante, relevée dans le nouveau repère (origine déplacée de 20 m).
+  await releverPieceRA(page, viser, [
+    [20, 20],
+    [23, 20],
+    [23, 22],
+    [20, 22],
+  ]);
+  await expect(page.getByText('Zone 2 terminée')).toBeVisible();
+  const brouillon = await lireBrouillon(page, id);
+  expect(brouillon?.zones).toHaveLength(2);
+  expect(brouillon!.zones[0].sessionRA).not.toBe(brouillon!.zones[1].sessionRA);
+
+  await page.getByRole('button', { name: 'Quitter' }).first().click();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await page.getByRole('button', { name: 'Sauvegarder et continuer' }).click();
+  const { pieces } = await piecesRdc(page);
+  expect(pieces).toHaveLength(2);
+  // Deux groupes distincts : ils ne gardent pas l'écart (faux) de 16 m entre les deux repères.
+  const [a, b] = pieces.map((p) => boite(p.sommets));
+  const ecart = Math.max(b.minX - a.maxX, a.minX - b.maxX, b.minY - a.maxY, a.minY - b.maxY);
+  expect(ecart).toBeGreaterThanOrEqual(99);
+  expect(ecart).toBeLessThan(200);
+});
+
+/** Ouvre le relevé depuis le plan, comme l'utilisateur (le retour ramène au plan). */
+async function ouvrirReleveDepuisPlan(page: Page, id: string) {
+  await page.goto(`./#/chantier/${id}`);
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+}
+
+test('retour du téléphone dans le relevé : remonte d’une étape et demande confirmation avant de perdre des mesures', async ({ page }) => {
+  const id = await creerChantier(page, 'Retour Android');
+  await ouvrirReleveDepuisPlan(page, id);
+
+  // Mètre laser, deux côtés saisis : le retour demande confirmation.
+  await page.getByRole('button', { name: 'Mètre laser' }).click();
+  for (const [i, longueur] of [400, 300].entries()) {
+    await page.getByLabel(`Côté ${i + 1}`, { exact: true }).fill(String(longueur));
+    await page.getByRole('button', { name: 'Tourner à droite' }).click();
+  }
+  await page.goBack();
+  const dialogue = page.getByRole('alertdialog');
+  await expect(dialogue).toContainText('Abandonner cette zone ?');
+  await dialogue.getByRole('button', { name: 'Annuler' }).click();
+  // On reste dans la saisie, mesures intactes.
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+  await expect(page.getByLabel('Côté 3', { exact: true })).toBeVisible();
+  await page.goBack();
+  await dialogue.getByRole('button', { name: 'Abandonner la zone' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+
+  // Une zone relevée, finalisation : le retour revient à la liste des zones.
+  await page.getByRole('button', { name: 'Pièce rectangulaire' }).click();
+  await page.getByLabel('Longueur', { exact: true }).fill('300');
+  await page.getByLabel('Largeur', { exact: true }).fill('250');
+  await page.getByRole('button', { name: 'Ajouter la zone' }).click();
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await expect(page.getByLabel('Nom de la zone 1')).toBeVisible();
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: /Relevé de pièces/ })).toBeVisible();
+
+  // Liste des zones : quitter demande confirmation ; refuser garde le relevé.
+  await page.goBack();
+  await expect(dialogue).toContainText('Abandonner le relevé ?');
+  await dialogue.getByRole('button', { name: 'Continuer le relevé' }).click();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+  // Confirmer : retour au plan, brouillon effacé.
+  await page.goBack();
+  await dialogue.getByRole('button', { name: 'Abandonner' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  await expect(page.getByRole('button', { name: 'Ajouter une pièce' })).toBeVisible();
+  expect(await lireBrouillon(page, id)).toBeNull();
+
+  // Choix de la méthode sans zone : le retour ramène simplement au plan.
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await expect(page.getByText('Comment voulez-vous relever la pièce ?')).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  await expect(page.getByRole('alertdialog')).toHaveCount(0);
+});
+
+test('retour du téléphone en réalité augmentée (session simulée) : termine la session en gardant la pièce', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'Retour RA');
+  await ouvrirReleveDepuisPlan(page, id);
+  const viser = await demarrerSessionRA(page);
+  for (const [x, z] of [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+  ]) {
+    await viser(x, z);
+    await page.getByRole('button', { name: 'Placer un angle' }).click();
+  }
+  // Pendant la session, le retour vaut « Quitter » : la pièce en cours (3 angles) est gardée.
+  await page.goBack();
+  await expect(page.getByRole('list', { name: 'Zones relevées' }).getByRole('listitem')).toHaveCount(1);
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}/releve$`));
+});
+
+/** Brouillon de relevé de `n` pièces rectangulaires (300 à 460 × 250 à 350 cm), comme après n relevés. */
+async function brouillonDePieces(page: Page, id: string, n: number) {
+  await page.evaluate(
+    ({ id, n }) => {
+      const zones = Array.from({ length: n }, (_, i) => {
+        const l = 300 + ((i * 37) % 161);
+        const h = 250 + ((i * 53) % 101);
+        const points = [
+          { x: 0, y: 0 },
+          { x: l, y: 0 },
+          { x: l, y: h },
+          { x: 0, y: h },
+        ];
+        return { id: `zone-${i}`, methode: 'rectangle', nom: '', points, hauteur: 250 };
+      });
+      sessionStorage.setItem(`abse-releve-${id}`, JSON.stringify({ version: 1, zones }));
+    },
+    { id, n },
+  );
+}
+
+test('trente pièces relevées : rangées lisibles sur le plan, aperçu sans noms qui se chevauchent', async ({ page }) => {
+  const id = await creerChantier(page, 'Trente pièces');
+  await brouillonDePieces(page, id, 30);
+  await page.goto(`./#/chantier/${id}`);
+  await page.getByRole('button', { name: 'Ajouter une pièce' }).click();
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await expect(page.getByLabel('Nom de la zone 30')).toHaveValue('Pièce 30');
+
+  // Aperçu : les noms affichés ne se chevauchent pas.
+  const etiquettes = await page
+    .locator('.releve-etiquette')
+    .evaluateAll((els) => els.map((e) => e.getBoundingClientRect()).map((r) => ({ x0: r.left, y0: r.top, x1: r.right, y1: r.bottom })));
+  for (let i = 0; i < etiquettes.length; i++) {
+    for (let j = i + 1; j < etiquettes.length; j++) {
+      const a = etiquettes[i];
+      const b = etiquettes[j];
+      expect(a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1).toBe(false);
+    }
+  }
+
+  await page.getByRole('button', { name: 'Sauvegarder et continuer' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/chantier/${id}$`));
+  const { pieces } = await piecesRdc(page);
+  expect(pieces).toHaveLength(30);
+  // Plan : rangées à la forme de l'écran, chaque pièce nommée sans avoir à zoomer.
+  await expect(page.locator('[data-etiquette]')).toHaveCount(30);
+});
+
+test('finalisation de trente pièces : la saisie d’un nom reste fluide', async ({ page, browserName }, info) => {
+  test.skip(browserName !== 'chromium', 'ralentissement du processeur par le protocole de Chrome');
+  const id = await creerChantier(page, 'Trente noms');
+  await brouillonDePieces(page, id, 30);
+  await page.goto(`./#/chantier/${id}/releve`);
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  const champ = page.getByLabel('Nom de la zone 1', { exact: true });
+  await expect(champ).toHaveValue('Pièce 1');
+
+  // Téléphone de milieu de gamme : processeur ralenti 4 fois.
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__longues = [];
+    new PerformanceObserver((l) => l.getEntries().forEach((e) => w.__longues.push(Math.round(e.duration)))).observe({ entryTypes: ['longtask'] });
+  });
+  await champ.click();
+  await champ.press('End');
+  await champ.pressSequentially('Accueil', { delay: 80 });
+  await expect(champ).toHaveValue('Pièce 1Accueil');
+  await page.waitForTimeout(500);
+  const longues: number[] = await page.evaluate(() => (window as any).__longues);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  info.annotations.push({ type: 'longues tâches (ms)', description: JSON.stringify(longues) });
+  // Aucune frappe ne bloque l’écran plus de 150 ms (260 à 480 ms par touche avant correction, moins de 70 ms après).
+  expect(Math.max(0, ...longues)).toBeLessThan(150);
+});
+
+/** Cibles tactiles visibles de moins de 44 px de haut ou de large (case à cocher : son libellé). */
+function petitesCibles(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>('button, input, select, textarea, a[href]')].flatMap((el) => {
+      const cible = el instanceof HTMLInputElement && el.type === 'checkbox' ? (el.closest('label') ?? el) : el;
+      const r = cible.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (r.width === 0 || r.height === 0 || style.visibility === 'hidden') return [];
+      if (r.height >= 43.5 && r.width >= 43.5) return [];
+      const nom = el.getAttribute('aria-label') ?? el.textContent?.trim() ?? el.id;
+      return [`${nom || el.tagName} ${Math.round(r.width)}x${Math.round(r.height)}`];
+    }),
+  );
+}
+
+test('cibles tactiles d’au moins 44 px sur tous les écrans du relevé', async ({ page }) => {
+  await simulerNavigateurRA(page);
+  const id = await creerChantier(page, 'Cibles');
+  await ouvrirReleveDepuisPlan(page, id);
+  const ecrans: Record<string, string[]> = {};
+  const mesurer = async (ecran: string) => {
+    ecrans[ecran] = await petitesCibles(page);
+  };
+  await mesurer('méthodes');
+
+  await page.getByRole('button', { name: 'Mètre laser' }).click();
+  await page.getByLabel('Côté 1', { exact: true }).fill('400');
+  await page.getByRole('button', { name: 'Tourner à droite' }).click();
+  await mesurer('mètre laser');
+  await page.getByLabel('Côté 2', { exact: true }).fill('300');
+  await page.getByRole('button', { name: 'Autre angle…' }).click();
+  await mesurer('mètre laser, autre angle');
+  await page.getByRole('button', { name: 'Annuler', exact: true }).click();
+  await page.getByRole('button', { name: 'Retour' }).click();
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Abandonner la zone' }).click();
+
+  await page.getByRole('button', { name: 'Pièce rectangulaire' }).click();
+  await page.getByLabel('Longueur', { exact: true }).fill('300');
+  await page.getByLabel('Largeur', { exact: true }).fill('250');
+  await mesurer('pièce rectangulaire');
+  await page.getByRole('button', { name: 'Ajouter la zone' }).click();
+  await mesurer('zones relevées');
+
+  await page.getByRole('button', { name: 'Ajouter une zone à la capture' }).click();
+  await mesurer('ajouter une zone');
+  const viser = await demarrerSessionRA(page);
+  await mesurer('réalité augmentée, angles');
+  await releverPieceRA(page, viser, [
+    [0, 0],
+    [4, 0],
+    [4, 3],
+    [0, 3],
+  ]);
+  await mesurer('réalité augmentée, zone terminée');
+  await page.getByRole('button', { name: 'Quitter' }).first().click();
+
+  await page.getByRole('button', { name: 'Finaliser la capture' }).click();
+  await page.getByLabel('Niveau', { exact: true }).selectOption({ label: '＋ Nouveau niveau…' });
+  await mesurer('finalisation');
+
+  expect(ecrans).toEqual(Object.fromEntries(Object.keys(ecrans).map((e) => [e, []])));
 });

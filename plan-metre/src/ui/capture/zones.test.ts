@@ -5,7 +5,7 @@ import type { Point } from '../../model/types';
 import { aire, aireSignee, boiteEnglobante, tourner } from '../../geometrie/polygone';
 import {
   angleAlignement,
-  boiteDesPieces,
+  boitesDesPieces,
   construirePieces,
   grouperZones,
   lireBrouillon,
@@ -37,6 +37,25 @@ function seChevauchent(a: Point[], b: Point[]): boolean {
   return ba.minX < bb.maxX && bb.minX < ba.maxX && ba.minY < bb.maxY && bb.minY < ba.maxY;
 }
 
+/** Pièces écartées d'au moins la marge, emprise proche d'un carré (ni bande, ni colonne). */
+function verifierDisposition(boites: ReturnType<typeof boiteEnglobante>[]) {
+  for (let i = 0; i < boites.length; i++) {
+    for (let j = i + 1; j < boites.length; j++) {
+      const a = boites[i];
+      const b = boites[j];
+      const ecart = Math.max(b.minX - a.maxX, a.minX - b.maxX, b.minY - a.maxY, a.minY - b.maxY);
+      expect(ecart).toBeGreaterThanOrEqual(MARGE_PLACEMENT_CM - 0.01);
+    }
+  }
+  const tout = boiteEnglobante(boites.flatMap((b) => [{ x: b.minX, y: b.minY }, { x: b.maxX, y: b.maxY }]));
+  const rapport = (tout.maxX - tout.minX) / (tout.maxY - tout.minY);
+  expect(rapport).toBeGreaterThan(0.6);
+  expect(rapport).toBeLessThan(1.6);
+  // Pas de place perdue : l'emprise reste proche de la somme des pièces et de leurs marges.
+  const surfaces = boites.reduce((s, b) => s + (b.maxX - b.minX + MARGE_PLACEMENT_CM) * (b.maxY - b.minY + MARGE_PLACEMENT_CM), 0);
+  expect((tout.maxX - tout.minX) * (tout.maxY - tout.minY)).toBeLessThan(surfaces * 1.6);
+}
+
 describe('création des zones', () => {
   it('rectangle : longueur sur x, largeur sur y', () => {
     const z = zoneRectangle('  Cuisine ', 250, 200, 240);
@@ -47,11 +66,21 @@ describe('création des zones', () => {
   it('réalité augmentée : conversion m → cm et session commune', () => {
     const zones = zonesDepuisRA(
       [
-        { angles: [{ x: 0, y: -1.4, z: 0 }, { x: 1, y: -1.4, z: 0 }, { x: 1, y: -1.4, z: 1 }], sol: -1.4, hauteur: 250, hauteurMesuree: true },
+        {
+          id: 4,
+          angles: [
+            { id: 1, x: 0, y: -1.4, z: 0 },
+            { id: 2, x: 1, y: -1.4, z: 0 },
+            { id: 3, x: 1, y: -1.4, z: 1 },
+          ],
+          sol: -1.4,
+          hauteur: 250,
+          hauteurMesuree: true,
+        },
       ],
       'session-a',
     );
-    expect(zones[0]).toMatchObject({ methode: 'ra', sessionRA: 'session-a', hauteur: 250 });
+    expect(zones[0]).toMatchObject({ id: 'session-a-4', methode: 'ra', sessionRA: 'session-a', hauteur: 250 });
     expect(zones[0].points).toEqual([
       { x: 0, y: 0 },
       { x: 100, y: 0 },
@@ -111,22 +140,31 @@ describe('alignement et redressement', () => {
 });
 
 describe('placement des zones', () => {
-  it('plan vide : zones laser / rectangle côte à côte depuis l’origine', () => {
+  it('plan vide : zones laser / rectangle rangées depuis l’origine, à la marge l’une de l’autre', () => {
     const a = zoneLaser(rect(0, 0, 400, 300), 250);
     const b = zoneRectangle('', 250, 200, 250);
-    const r = placerZones([a, b], { redresser: false, existant: null });
+    const r = placerZones([a, b], { redresser: false, existantes: [] });
     expect(r.map((x) => x.zone.id)).toEqual([a.id, b.id]);
     expect(boiteEnglobante(r[0].points)).toEqual({ minX: 0, minY: 0, maxX: 400, maxY: 300 });
-    expect(boiteEnglobante(r[1].points)).toEqual({ minX: 400 + MARGE_PLACEMENT_CM, minY: 0, maxX: 750, maxY: 200 });
+    // Plus ramassé l'une sous l'autre (400 × 600) que côte à côte (750 × 300).
+    expect(boiteEnglobante(r[1].points)).toEqual({ minX: 0, minY: 300 + MARGE_PLACEMENT_CM, maxX: 250, maxY: 600 });
     expect(seChevauchent(r[0].points, r[1].points)).toBe(false);
     expect(aire(r[0].points)).toBe(120000);
     expect(aire(r[1].points)).toBe(50000);
   });
 
-  it('plan occupé : à droite des pièces existantes avec la marge, aligné sur leur haut', () => {
-    const existant = { minX: -50, minY: 20, maxX: 600, maxY: 500 };
-    const r = placerZones([zoneRectangle('', 300, 300, 250)], { redresser: false, existant });
-    expect(boiteEnglobante(r[0].points)).toEqual({ minX: 700, minY: 20, maxX: 1000, maxY: 320 });
+  it('plan occupé : dans la première place libre à la marge des pièces existantes', () => {
+    // Deux pièces existantes en L : la place libre à droite de la première est prise.
+    const existantes = [
+      { minX: -50, minY: 20, maxX: 350, maxY: 320 },
+      { minX: -50, minY: 420, maxX: 800, maxY: 900 },
+    ];
+    const r = placerZones([zoneRectangle('', 300, 300, 250)], { redresser: false, existantes });
+    expect(boiteEnglobante(r[0].points)).toEqual({ minX: 450, minY: 20, maxX: 750, maxY: 320 });
+    // Plus de place à côté : en dessous, aligné à gauche.
+    const pleine = [{ minX: -50, minY: 20, maxX: 600, maxY: 500 }];
+    const r2 = placerZones([zoneRectangle('', 300, 300, 250)], { redresser: false, existantes: pleine });
+    expect(boiteEnglobante(r2[0].points)).toEqual({ minX: -50, minY: 600, maxX: 250, maxY: 900 });
   });
 
   it('réalité augmentée : même session = positions relatives gardées, groupe aligné', () => {
@@ -136,7 +174,7 @@ describe('placement des zones', () => {
     const cuisine = rect(10, 200, 300, 400).map((p) => tourner(p, angle));
     const a = zoneRA(sejour);
     const b = zoneRA(cuisine);
-    const r = placerZones([a, b], { redresser: false, existant: null });
+    const r = placerZones([a, b], { redresser: false, existantes: [] });
     const [pa, pb] = r.map((x) => x.points);
     // Le plus long côté de la première zone est sur l'axe x.
     expect(Math.abs(pa[0].y - pa[1].y)).toBeLessThan(0.15);
@@ -156,7 +194,7 @@ describe('placement des zones', () => {
     const bruit = (pts: Point[]) => pts.map((p, i) => ({ x: p.x + (i % 2 ? 2 : -1.5), y: p.y + (i % 3 ? -1 : 2) }));
     const a = zoneRA(bruit(rect(0, 0, 500, 400)).map((p) => tourner(p, angle)));
     const b = zoneRA(bruit(rect(510, 0, 300, 400)).map((p) => tourner(p, angle)));
-    const r = placerZones([a, b], { redresser: true, existant: null });
+    const r = placerZones([a, b], { redresser: true, existantes: [] });
     for (const { points } of r) {
       expect(points).toHaveLength(4);
       for (let i = 0; i < 4; i++) {
@@ -177,20 +215,48 @@ describe('placement des zones', () => {
       zoneRA(rect(0, 0, 250, 250), 's2'),
       zoneLaser(rect(0, 0, 400, 300), 250),
     ];
-    const r = placerZones(zones, { redresser: false, existant: { minX: 0, minY: 0, maxX: 500, maxY: 400 } });
+    const existant = { minX: 0, minY: 0, maxX: 500, maxY: 400 };
+    const r = placerZones(zones, { redresser: false, existantes: [existant] });
     for (let i = 0; i < r.length; i++) {
       for (let j = i + 1; j < r.length; j++) expect(seChevauchent(r[i].points, r[j].points)).toBe(false);
     }
-    expect(Math.min(...r.flatMap((x) => x.points.map((p) => p.x)))).toBe(600);
+    // Les deux pièces de la session s1 restent côte à côte (10 cm).
+    expect(boiteEnglobante(r[1].points).minX - boiteEnglobante(r[0].points).maxX).toBe(10);
+    verifierDisposition([existant, boiteEnglobante([...r[0].points, ...r[1].points]), ...r.slice(2).map((x) => boiteEnglobante(x.points))]);
   });
 
-  it('boîte des pièces existantes : murs compris', () => {
+  it('beaucoup de pièces : rangées compactes et lisibles, pas une seule bande', () => {
+    const zones = Array.from({ length: 30 }, (_, i) => zoneRectangle('', 300 + ((i * 37) % 161), 250 + ((i * 53) % 101), 250));
+    const r = placerZones(zones, { redresser: false, existantes: [] });
+    verifierDisposition(r.map((x) => boiteEnglobante(x.points)));
+  });
+
+  it('écran en portrait : rangées plus étroites, ensemble plus haut que large', () => {
+    const zones = Array.from({ length: 30 }, (_, i) => zoneRectangle('', 300 + ((i * 37) % 161), 250 + ((i * 53) % 101), 250));
+    const r = placerZones(zones, { redresser: false, existantes: [], rapport: 0.5 });
+    const b = boiteEnglobante(r.flatMap((x) => x.points));
+    const rapport = (b.maxX - b.minX) / (b.maxY - b.minY);
+    expect(rapport).toBeGreaterThan(0.35);
+    expect(rapport).toBeLessThan(0.75);
+  });
+
+  it('pièces ajoutées une à une (un relevé par pièce) : la disposition reste compacte', () => {
+    const boites: ReturnType<typeof boiteEnglobante>[] = [];
+    for (let i = 0; i < 30; i++) {
+      const zone = zoneRectangle('', 300 + ((i * 37) % 161), 250 + ((i * 53) % 101), 250);
+      const [placee] = placerZones([zone], { redresser: false, existantes: boites });
+      boites.push(boiteEnglobante(placee.points));
+    }
+    verifierDisposition(boites);
+  });
+
+  it('boîtes des pièces existantes : murs compris', () => {
     const cat = catalogueParDefaut();
     const p = pieceRectangle('A', 400, 300); // cloison 98 mm par défaut
-    const b = boiteDesPieces([p], cat)!;
+    const [b] = boitesDesPieces([p], cat);
     expect(b.minX).toBeCloseTo(-9.8);
     expect(b.maxX).toBeCloseTo(409.8);
-    expect(boiteDesPieces([], cat)).toBeNull();
+    expect(boitesDesPieces([], cat)).toEqual([]);
   });
 });
 
@@ -198,7 +264,7 @@ describe('pièces créées', () => {
   it('reprend les noms, hauteurs et type de mur choisis', () => {
     const a = zoneLaser(rect(0, 0, 400, 300), 250);
     const b = zoneRectangle('Cuisine', 250, 200, 250);
-    const placees = placerZones([a, b], { redresser: false, existant: null });
+    const placees = placerZones([a, b], { redresser: false, existantes: [] });
     const pieces = construirePieces(placees, {
       noms: { [a.id]: ' Séjour ' },
       hauteurs: { [b.id]: 270 },

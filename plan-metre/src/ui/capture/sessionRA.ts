@@ -29,15 +29,17 @@ import {
   WebGLRenderer,
 } from 'three';
 import {
+  altitudeAngles,
   altitudeSol,
   distanceHorizontale,
-  estSurfaceSol,
-  intersectionRayonSol,
   poseSegment,
   SEUIL_FERMETURE_M,
+  viseeSol,
   type AngleRA,
   type EtatRA,
   type Point3,
+  type PointVise,
+  type ResultatVisee,
   type ZoneTermineeRA,
 } from './releveRA';
 
@@ -76,6 +78,12 @@ export interface RappelsSessionRA {
   surFin(interrompue: boolean): void;
   /** La session passe au second plan (dialogue système) ou revient. */
   surVisibilite(visible: boolean): void;
+  /**
+   * Le suivi a déplacé l'origine du repère (événement « reset », par exemple
+   * après une longue perte du suivi) : les positions déjà relevées ne sont plus
+   * comparables aux nouvelles visées.
+   */
+  surRuptureRepere(): void;
 }
 
 function erreurNommee(nom: string, message: string): Error {
@@ -124,12 +132,18 @@ export class SessionRA {
   private fermeDessine = false;
   private zonesDessinees: readonly ZoneTermineeRA[] | null = null;
   private pointVise: Point3 | null = null;
+  /** Altitude (m) du dernier sol touché : repli de la visée avant le premier angle. */
+  private dernierSol: number | null = null;
   private derniereVisee = { t: 0, present: false, suivi: false, estime: false };
   private derniersAjustements = 0;
   private readonly ancres = new Map<number, XRAnchor>();
+  /** Angles suivis par des ancres : zone en cours et zones terminées de la session. */
+  private anglesAncres: readonly AngleRA[] = [];
   private readonly ancresDemandees = new Map<number, Point3>();
   private readonly ancresEnCours = new Set<number>();
   private ancresPossibles: boolean;
+  /** Espace de référence du relevé (celui de three.js), écouté pour « reset ». */
+  private readonly espace: XRReferenceSpace | null;
   private finDemandee = false;
   private nettoye = false;
   /** La surimpression DOM est affichée (sinon : touchers seulement). */
@@ -185,7 +199,8 @@ export class SessionRA {
     session.addEventListener('select', this.surSelect);
     session.addEventListener('visibilitychange', this.surChangementVisibilite);
     racine.addEventListener('beforexrselect', this.surAvantSelection);
-    renderer.setAnimationLoop(this.image);
+    this.espace = renderer.xr.getReferenceSpace();
+    this.espace?.addEventListener('reset', this.surReset);
   }
 
   /**
@@ -218,6 +233,11 @@ export class SessionRA {
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
       renderer.xr.setReferenceSpaceType('local');
+      // Boucle posée avant setSession, comme dans les exemples de three.js :
+      // « sessionstart » arrête alors la boucle de la fenêtre et seules les
+      // images de la session dessinent.
+      let instance: SessionRA | null = null;
+      renderer.setAnimationLoop((temps, frame) => instance?.image(temps, frame));
       await renderer.xr.setSession(session);
       const espaceVue = await session.requestReferenceSpace('viewer');
       if (typeof session.requestHitTestSource !== 'function') {
@@ -232,7 +252,8 @@ export class SessionRA {
       } catch {
         sourcePlafond = null;
       }
-      return new SessionRA(session, renderer, sourceSol, sourcePlafond, racine, rappels);
+      instance = new SessionRA(session, renderer, sourceSol, sourcePlafond, racine, rappels);
+      return instance;
     } catch (e) {
       liberer(renderer);
       await session.end().catch(() => undefined);
@@ -251,16 +272,18 @@ export class SessionRA {
     this.etat = etat;
     // Pièce fermée (étape hauteur) : le segment de fermeture est dessiné.
     const ferme = etat.etape === 'hauteur';
-    if (etat.angles !== this.anglesDessines || ferme !== this.fermeDessine) {
+    const anglesChanges = etat.angles !== this.anglesDessines;
+    if (anglesChanges || ferme !== this.fermeDessine) {
       this.anglesDessines = etat.angles;
       this.fermeDessine = ferme;
       this.dessinerAngles(etat.angles, ferme);
-      this.synchroniserAncres(etat.angles);
     }
-    if (etat.zones !== this.zonesDessinees) {
+    const zonesChangees = etat.zones !== this.zonesDessinees;
+    if (zonesChangees) {
       this.zonesDessinees = etat.zones;
       this.dessinerZones(etat.zones);
     }
+    if (anglesChanges || zonesChangees) this.synchroniserAncres([...etat.angles, ...etat.zones.flatMap((z) => z.angles)]);
   }
 
   /** Termine la session à la demande de l'appli. */
@@ -278,9 +301,10 @@ export class SessionRA {
   // ─── Boucle d'affichage ────────────────────────────────────────────────
 
   private readonly image = (_temps: number, frame?: XRFrame) => {
-    if (this.nettoye) return;
+    // Hors d'une image XR, le framebuffer de la session est inutilisable.
+    if (this.nettoye || !frame) return;
     const espace = this.renderer.xr.getReferenceSpace();
-    if (frame && espace) {
+    if (espace) {
       try {
         this.mettreAJourVisee(frame, espace);
         this.mettreAJourAncres(frame, espace);
@@ -297,29 +321,36 @@ export class SessionRA {
     const vue = frame.getViewerPose(espace);
     const suivi = Boolean(vue) && !vue!.emulatedPosition;
     const modePlafond = etat?.etape === 'hauteur';
-    let point: Point3 | null = null;
-    let matrice: Float32Array | null = null;
-    let estime = false;
+    const sol = etat ? altitudeSol(etat) : null;
 
     const source = modePlafond ? (this.sourcePlafond ?? this.sourceSol) : this.sourceSol;
+    const resultats: ResultatVisee[] = [];
     for (const r of frame.getHitTestResults(source)) {
       const pose = r.getPose(espace);
       if (!pose) continue;
-      if (!modePlafond && !estSurfaceSol(pose.transform.matrix)) continue;
       const p = pose.transform.position;
-      point = { x: p.x, y: p.y, z: p.z };
-      matrice = pose.transform.matrix;
-      break;
+      resultats.push({ position: { x: p.x, y: p.y, z: p.z }, matrice: pose.transform.matrix });
     }
-    // Repli : rayon de visée prolongé jusqu'au plan du sol déjà connu.
-    const sol = etat ? altitudeSol(etat) : null;
-    if (!point && !modePlafond && vue && sol !== null) {
-      const o = vue.transform.position;
-      const q = vue.transform.orientation;
-      const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
-      point = intersectionRayonSol({ x: o.x, y: o.y, z: o.z }, { x: dir.x, y: dir.y, z: dir.z }, sol);
-      estime = point !== null;
+    let vise: PointVise | null;
+    if (modePlafond) {
+      // Jonction mur / plafond : la surface la plus proche, quelle qu'elle soit.
+      const r = resultats[0];
+      vise = r ? { point: r.position, matrice: r.matrice, estime: false } : null;
+    } else {
+      // Rayon de visée (axe −z du téléphone), prolongé jusqu'au sol faute de surface.
+      let rayon: { origine: Point3; direction: Point3 } | null = null;
+      if (vue) {
+        const o = vue.transform.position;
+        const q = vue.transform.orientation;
+        const dir = new Vector3(0, 0, -1).applyQuaternion(new Quaternion(q.x, q.y, q.z, q.w));
+        rayon = { origine: { x: o.x, y: o.y, z: o.z }, direction: { x: dir.x, y: dir.y, z: dir.z } };
+      }
+      vise = viseeSol(resultats, sol ?? this.dernierSol, rayon, etat ? altitudeAngles(etat.angles) : null);
+      if (vise?.matrice) this.dernierSol = vise.point.y;
     }
+    const point = vise?.point ?? null;
+    const matrice = vise?.matrice ?? null;
+    const estime = vise?.estime ?? false;
     this.pointVise = point;
 
     // Réticule.
@@ -423,6 +454,7 @@ export class SessionRA {
   // ─── Ancres (facultatives) : le suivi corrige la position des angles ──
 
   private synchroniserAncres(angles: readonly AngleRA[]) {
+    this.anglesAncres = angles;
     if (!this.ancresPossibles) return;
     const ids = new Set(angles.map((a) => a.id));
     for (const [id, ancre] of this.ancres) {
@@ -454,7 +486,7 @@ export class SessionRA {
         promesse
           .then((ancre) => {
             this.ancresEnCours.delete(id);
-            const encore = this.anglesDessines?.some((a) => a.id === id);
+            const encore = this.anglesAncres.some((a) => a.id === id);
             if (this.nettoye || !encore) supprimerAncre(ancre);
             else this.ancres.set(id, ancre);
           })
@@ -467,7 +499,7 @@ export class SessionRA {
     this.derniersAjustements = maintenant;
     const suivies = frame.trackedAnchors;
     const corrections: { id: number; point: Point3 }[] = [];
-    for (const a of this.anglesDessines ?? []) {
+    for (const a of this.anglesAncres) {
       const ancre = this.ancres.get(a.id);
       if (!ancre || (suivies && !suivies.has(ancre))) continue;
       const pose = frame.getPose(ancre.anchorSpace, espace);
@@ -495,6 +527,13 @@ export class SessionRA {
     this.rappels.surVisibilite(this.session.visibilityState === 'visible');
   };
 
+  private readonly surReset = () => {
+    if (this.nettoye) return;
+    this.dernierSol = null;
+    this.pointVise = null;
+    this.rappels.surRuptureRepere();
+  };
+
   private readonly surFinSession = () => {
     if (this.nettoye) return;
     this.nettoyer();
@@ -519,6 +558,7 @@ export class SessionRA {
     this.session.removeEventListener('select', this.surSelect);
     this.session.removeEventListener('visibilitychange', this.surChangementVisibilite);
     this.racine.removeEventListener('beforexrselect', this.surAvantSelection);
+    this.espace?.removeEventListener('reset', this.surReset);
     this.scene.clear();
     for (const g of [...this.geometries, ...this.geometriesZones]) g.dispose();
     for (const m of this.materiaux) m.dispose();

@@ -1,12 +1,15 @@
 // Aperçus SVG du relevé : vignette d'une zone, tracé en direct du mètre laser,
 // assemblage des zones sur le plan cible.
 
-import { useId, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { Point } from '../../model/types';
-import { aire, aireSignee, distance, pointEtiquette } from '../../geometrie/polygone';
+import { aire, aireSignee, boiteEnglobante, distance, pointEtiquette } from '../../geometrie/polygone';
 import { formaterValeur } from '../../metre/calcul';
 import { cadrer, cheminSvg, type Cadrage } from './geometrieReleve';
 import { directionCap, type TraceLaser } from './laser';
+
+/** Taille minimale (px) d'une pièce pour y écrire son nom et sa surface, comme sur le plan. */
+const TAILLE_MIN_ETIQUETTE = 34;
 
 function identifiantSvg(id: string): string {
   return `releve-${id.replace(/[^a-zA-Z0-9_-]/g, '')}`;
@@ -168,7 +171,7 @@ export interface PieceApercu {
 }
 
 /** Assemblage : pièces existantes du plan cible (grisées) et nouvelles pièces. */
-export function ApercuAssemblage({
+export const ApercuAssemblage = memo(function ApercuAssemblage({
   existantes,
   nouvelles,
 }: {
@@ -197,6 +200,12 @@ export function ApercuAssemblage({
         <path key={p.id} d={cheminSvg(p.points.map(t), true)} className="releve-piece-nouvelle" />
       ))}
       {nouvelles.map((p) => {
+        // Pièce trop petite à cette échelle (beaucoup de pièces) : pas d'étiquette, qui déborderait sur les voisines.
+        const b = boiteEnglobante(p.points);
+        const largeurTexte = Math.max(p.nom.length * 7.5, surfaceM2(p.points).length * 6.5);
+        if ((b.maxY - b.minY) * c.echelle < TAILLE_MIN_ETIQUETTE || (b.maxX - b.minX) * c.echelle < Math.max(TAILLE_MIN_ETIQUETTE, largeurTexte)) {
+          return null;
+        }
         const e = t(pointEtiquette(p.points));
         return (
           <text key={`t${p.id}`} x={e.x} y={e.y} className="releve-etiquette" textAnchor="middle">
@@ -211,4 +220,4 @@ export function ApercuAssemblage({
       })}
     </svg>
   );
-}
+});

@@ -13,6 +13,7 @@ import {
   poseSegment,
   problemeFermeture,
   reduireRA,
+  viseeSol,
   type ActionRA,
   type EtatRA,
   type Point3,
@@ -117,10 +118,24 @@ describe('hauteur sous plafond', () => {
     expect(e.hauteurMesuree).toBe(true);
   });
 
-  it('le sol est la moyenne des angles posés', () => {
+  it('le sol est la médiane des angles posés', () => {
     const e = jouer([placer(0, 0, -1.41), placer(4, 0, -1.39), placer(4, 3, -1.4), { type: 'fermer' }]);
     expect(altitudeSol(e)).toBeCloseTo(-1.4);
     expect(reduireRA(e, { type: 'mesurer-hauteur', point: p(1, 1, 1.1) }).hauteur).toBe(250);
+    // Un angle douteux ne déplace pas le sol (la moyenne le ferait).
+    const angles = [p(0, 0, -1.41), p(4, 0, -1.39), p(4, 3, -1.33), p(0, 3, -1.4)].map((a, i) => ({ ...a, id: i + 1 }));
+    expect(altitudeSol({ angles, zones: [] })).toBeCloseTo(-1.395);
+  });
+
+  it('refuse un angle posé sur une surface surélevée (pile de plaques, établi)', () => {
+    let e = jouer([placer(0, 0), placer(4, 0), placer(4, 3, SOL + 0.8)]);
+    expect(e.angles).toHaveLength(2);
+    expect(e.message).toMatch(/80 cm plus haut que les autres angles/);
+    // Le sol inégal de quelques centimètres reste accepté.
+    e = jouer([placer(4, 3, SOL + 0.03), placer(0, 3), { type: 'fermer' }], e);
+    expect(e.etape).toBe('hauteur');
+    expect(reduireRA(e, { type: 'mesurer-hauteur', point: p(2, 0, SOL + 2.5) }).hauteur).toBe(250);
+    expect(jouer([placer(0, 0), placer(4, 0, SOL - 0.2)]).message).toMatch(/20 cm plus bas que le premier angle/);
   });
 
   it('refuse une hauteur mesurée improbable', () => {
@@ -155,8 +170,9 @@ describe('zones successives dans la même session', () => {
     expect(e.zones).toHaveLength(1);
     expect(e.zones[0]).toMatchObject({ hauteur: 250, hauteurMesuree: false });
     expect(e.zones[0].sol).toBeCloseTo(SOL);
-    // Les angles des zones terminées ne portent plus d'identifiant d'ancre.
-    expect(e.zones[0].angles[0]).toEqual({ x: 0, y: SOL, z: 0 });
+    // Les angles des zones terminées gardent leur identifiant (ancres) ; la zone a le sien (brouillon).
+    expect(e.zones[0].angles[0]).toEqual({ id: 1, x: 0, y: SOL, z: 0 });
+    expect(e.zones[0].id).toBe(5);
 
     // Pas d'angle tant qu'on n'a pas demandé une nouvelle zone.
     expect(reduireRA(e, placer(5, 0)).angles).toHaveLength(0);
@@ -186,6 +202,15 @@ describe('ajustement des angles par les ancres', () => {
     expect(r.angles[1]).toEqual({ id: 2, x: 4.02, y: SOL, z: 0.01 });
     expect(r.angles[0]).toBe(e.angles[0]);
   });
+  it('corrige aussi les zones terminées de la session, et leur sol', () => {
+    const e = jouer([...rectangle, { type: 'fermer' }, { type: 'saisir-hauteur', hauteur: 250 }, { type: 'terminer-zone' }, { type: 'nouvelle-zone' }, placer(5, 0)]);
+    const corrections = [1, 2, 3, 4].map((id) => ({ id, point: { ...e.zones[0].angles[id - 1], y: SOL + 0.02 } }));
+    const r = reduireRA(e, { type: 'ajuster-angles', corrections: [...corrections, { id: 2, point: p(4.2, 0, SOL + 0.02) }] });
+    expect(r.zones[0].angles[1]).toEqual({ id: 2, x: 4.2, y: SOL + 0.02, z: 0 });
+    expect(r.zones[0].sol).toBeCloseTo(SOL + 0.02);
+    expect(r.angles).toBe(e.angles);
+  });
+
   it('ignore les identifiants inconnus sans changer l’état', () => {
     const e = jouer(rectangle);
     expect(reduireRA(e, { type: 'ajuster-angles', corrections: [{ id: 99, point: p(1, 1) }] })).toBe(e);
@@ -200,6 +225,13 @@ describe('messages', () => {
     const vide = etatInitialRA();
     expect(reduireRA(vide, { type: 'effacer-message' })).toBe(vide);
   });
+  it('rupture du repère : pièce vide, identifiants poursuivis, message', () => {
+    const e = jouer([...rectangle, { type: 'fermer' }, { type: 'saisir-hauteur', hauteur: 250 }, { type: 'terminer-zone' }, { type: 'nouvelle-zone' }, placer(5, 0)]);
+    const r = reduireRA(e, { type: 'rupture-repere', message: 'Le suivi a perdu ses repères.' });
+    expect(r).toMatchObject({ etape: 'angles', angles: [], zones: [], hauteur: null, message: 'Le suivi a perdu ses repères.' });
+    expect(reduireRA(r, placer(0, 0)).angles[0].id).toBe(e.prochainId);
+  });
+
   it('repart de zéro pour une nouvelle session', () => {
     expect(jouer([...rectangle, { type: 'reinitialiser' }])).toEqual(etatInitialRA());
   });
@@ -293,6 +325,41 @@ describe('outils de la colle WebXR', () => {
     // Mur : normale horizontale.
     const mur = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1];
     expect(estSurfaceSol(mur)).toBe(false);
+  });
+
+  it('visée au sol : un mur touché au pied donne l’angle à son aplomb, plus haut il masque le sol', () => {
+    const sol = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const mur = [0, 0, 1, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 0, 1];
+    const incline = [1, 0, 0, 0, 0, 0.6, 0.8, 0, 0, -0.8, 0.6, 0, 0, 0, 0, 1];
+    const rayon = { origine: p(0, 0, SOL + 1.4), direction: { x: 3, y: -1.35, z: 0 } };
+    // Sol touché : retenu tel quel, avec sa pose.
+    expect(viseeSol([{ position: p(2, 0), matrice: sol }], SOL, rayon)).toEqual({ point: p(2, 0), matrice: sol, estime: false });
+    // Pied du mur (5 cm au-dessus du sol) : point du sol à l'aplomb, même si un sol est touché derrière.
+    const pied = { position: p(3, 0, SOL + 0.05), matrice: mur };
+    expect(viseeSol([pied, { position: p(3.11, 0), matrice: sol }], SOL, rayon)).toEqual({ point: p(3, 0), matrice: null, estime: false });
+    // Mur touché à 1 m : rien derrière lui, ni sol touché ni point estimé.
+    expect(viseeSol([{ position: p(3, 0, SOL + 1), matrice: mur }, { position: p(7, 0), matrice: sol }], SOL, rayon)).toBeNull();
+    // Sol inconnu : le pied du mur ne peut pas être calculé.
+    expect(viseeSol([pied], null, rayon)).toBeNull();
+    // Surface inclinée ignorée ; faute d'autre surface, point estimé sur le plan du sol.
+    const estime = viseeSol([{ position: p(1, 0, SOL + 0.3), matrice: incline }], SOL, rayon);
+    expect(estime?.estime).toBe(true);
+    expect(estime?.point.x).toBeCloseTo(3.111, 3);
+    expect(viseeSol([], null, rayon)).toBeNull();
+  });
+
+  it('visée au sol : une surface horizontale hors du niveau des angles posés est ignorée', () => {
+    const sol = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+    const rayon = { origine: p(0, 0, SOL + 1.4), direction: { x: 3, y: -1.35, z: 0 } };
+    // Dessus d'une pile de plaques à 80 cm : ignoré au profit du sol touché plus loin.
+    const pile = { position: p(2, 0, SOL + 0.8), matrice: sol };
+    const derriere = { position: p(3, 0), matrice: sol };
+    expect(viseeSol([pile, derriere], SOL, rayon, SOL)?.point).toEqual(p(3, 0));
+    expect(viseeSol([pile], SOL, rayon, SOL)?.estime).toBe(true);
+    // Sol inégal de quelques centimètres : accepté.
+    expect(viseeSol([{ position: p(2, 0, SOL + 0.05), matrice: sol }], SOL, rayon, SOL)?.estime).toBe(false);
+    // Sans angle posé, aucune référence : la surface est acceptée.
+    expect(viseeSol([pile, derriere], SOL, rayon, null)?.point).toEqual(pile.position);
   });
 
   it('pose un segment au sol entre deux angles', () => {

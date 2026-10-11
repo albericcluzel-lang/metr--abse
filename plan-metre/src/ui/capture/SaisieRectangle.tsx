@@ -5,6 +5,7 @@ import { NOMS_PIECES } from '../../model/catalogue';
 import { BarreHaut, Bouton, ChampNombre, ChampTexte } from '../commun/composants';
 import { Icone } from '../commun/Icone';
 import { ApercuAssemblage } from './Apercus';
+import { useRetourSysteme } from './retourSysteme';
 import { zoneRectangle, type ZoneRelevee } from './zones';
 
 export function SaisieRectangle({
@@ -25,6 +26,8 @@ export function SaisieRectangle({
   const [message, setMessage] = useState<string | null>(null);
 
   const valide = longueur > 0 && largeur > 0;
+  const retour = () => onRetour(Number.isFinite(longueur) || Number.isFinite(largeur));
+  useRetourSysteme(retour);
 
   const valider = () => {
     if (!valide) {
@@ -36,10 +39,7 @@ export function SaisieRectangle({
 
   return (
     <div className="ecran">
-      <BarreHaut
-        titre="Pièce rectangulaire"
-        onRetour={() => onRetour(Number.isFinite(longueur) || Number.isFinite(largeur))}
-      />
+      <BarreHaut titre="Pièce rectangulaire" onRetour={retour} />
       <div className="ecran-contenu etroit">
         <div className="releve-cadre-apercu">
           {valide ? (

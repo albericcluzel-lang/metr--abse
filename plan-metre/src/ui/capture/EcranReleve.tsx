@@ -15,6 +15,7 @@ import { ChoixMethode, type EtatDisponibiliteRA } from './ChoixMethode';
 import { EcranRA } from './EcranRA';
 import { Finalisation } from './Finalisation';
 import { ListeZones } from './ListeZones';
+import { quitterParRetour, useRetourSysteme } from './retourSysteme';
 import { SaisieLaser } from './SaisieLaser';
 import { SaisieRectangle } from './SaisieRectangle';
 import { verifierDisponibiliteRA } from './sessionRA';
@@ -79,9 +80,6 @@ function ReleveChantier({ id }: { id: string }) {
     if (n > 0) notifier(`Relevé en cours retrouvé : ${n} zone${n > 1 ? 's' : ''}`);
   }, []);
 
-  if (!projet) return <div className="chargement">Chargement du chantier…</div>;
-
-  const hauteurDefaut = niveau?.hauteurDefaut ?? 250;
   const quitter = () => naviguer({ ecran: 'chantier', id });
 
   const ajouterZones = (nouvelles: ZoneRelevee[], message?: string | null) => {
@@ -90,7 +88,11 @@ function ReleveChantier({ id }: { id: string }) {
     if (message) notifier(message);
   };
 
-  const abandonner = async () => {
+  // Zones d'une session de réalité augmentée : la dernière version reçue remplace la précédente.
+  const remplacerZonesRA = (sessionRA: string, nouvelles: ZoneRelevee[]) =>
+    setZones((z) => [...z.filter((x) => x.sessionRA !== sessionRA), ...nouvelles]);
+
+  const abandonner = async (sortir: () => void = quitter) => {
     if (zones.length > 0) {
       const ok = await confirmer({
         titre: 'Abandonner le relevé ?',
@@ -103,7 +105,7 @@ function ReleveChantier({ id }: { id: string }) {
     }
     termine.current = true;
     ecrireBrouillonStocke(id, []);
-    quitter();
+    sortir();
   };
 
   const retirer = async (zone: ZoneRelevee, index: number) => {
@@ -132,6 +134,23 @@ function ReleveChantier({ id }: { id: string }) {
     setEtape(zones.length > 0 ? 'zones' : 'methodes');
   };
 
+  // Retour du téléphone : même action que la flèche de l'écran affiché. Les
+  // écrans de saisie, la réalité augmentée et la finalisation gèrent le leur.
+  const sortirParRetour = () => quitterParRetour(quitter);
+  useRetourSysteme(
+    etape === 'zones'
+      ? () => void abandonner(sortirParRetour)
+      : etape === 'methodes'
+        ? zones.length > 0
+          ? () => setEtape('zones')
+          : sortirParRetour
+        : null,
+  );
+
+  if (!projet) return <div className="chargement">Chargement du chantier…</div>;
+
+  const hauteurDefaut = niveau?.hauteurDefaut ?? 250;
+
   switch (etape) {
     case 'laser':
       return (
@@ -153,7 +172,8 @@ function ReleveChantier({ id }: { id: string }) {
         <EcranRA
           hauteurDefaut={hauteurDefaut}
           onRetour={() => setEtape(zones.length > 0 ? 'zones' : 'methodes')}
-          onTerminer={(z, message) => ajouterZones(z, message)}
+          onZones={remplacerZonesRA}
+          onTerminer={(message) => ajouterZones([], message)}
         />
       );
     case 'finalisation':
