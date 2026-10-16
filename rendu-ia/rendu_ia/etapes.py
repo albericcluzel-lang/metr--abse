@@ -156,20 +156,23 @@ def storyboard_folder(project: Project, image: Path) -> Path:
     return project.output / "storyboard" / image.stem
 
 
-def write_storyboard(provider: Provider, settings: Settings, image: Path, count: int) -> list[Shot]:
-    """Le modèle de texte regarde l'image et écrit les plans (le nœud « Assistant » de la vidéo)."""
-    if settings.text_model is None:
+def write_storyboard(provider: Provider | None, settings: Settings, image: Path, count: int,
+                     ambiance: str = prompts.DEFAULT_AMBIANCE, same_image: bool = False) -> list[Shot]:
+    """Le modèle de texte regarde l'image et écrit les plans (le nœud « Assistant » des vidéos)."""
+    if settings.text_model is None or provider is None:
         return list(prompts.DEFAULT_SHOTS[:count])
-    text = provider.write_text(image, prompts.STORYBOARD_SYSTEM, prompts.storyboard_request(count))
+    text = provider.write_text(image, prompts.STORYBOARD_SYSTEM,
+                               prompts.storyboard_request(count, ambiance, same_image))
     try:
         return prompts.parse_storyboard(text, count)
     except ValueError as exc:  # JSONDecodeError en hérite
         raise ServiceError(f"storyboard illisible ({exc}). Réponse reçue : {text[:300]}") from exc
 
 
-def save_storyboard(folder: Path, image: Path, shots: list[Shot]) -> Path:
+def save_storyboard(folder: Path, image: Path, shots: list[Shot],
+                    ambiance: str = prompts.DEFAULT_AMBIANCE) -> Path:
     path = folder / "storyboard.json"
-    data = {"image": str(image), "plans": [
+    data = {"image": str(image), "ambiance": ambiance, "plans": [
         {"fichier": f"plan_{index}", "titre": shot.title, "image": shot.image, "mouvement": shot.motion}
         for index, shot in enumerate(shots, start=1)]}
     write_atomic(path, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
@@ -183,6 +186,25 @@ def load_storyboard(folder: Path, image: Path | None = None) -> list[Shot] | Non
         return None
     plans = json.loads(path.read_text(encoding="utf-8"))["plans"]
     return [Shot(plan["titre"], plan["image"], plan["mouvement"]) for plan in plans]
+
+
+def copy_plans(image: Path, folder: Path, count: int) -> list[Path]:
+    """Plans sans image générée : chacun reprend l'image de départ, qui sera animée avec un mouvement
+    différent. Une copie déjà à jour (plus récente que le storyboard) est gardée."""
+    storyboard = (folder / "storyboard.json").stat().st_mtime
+    data = image.read_bytes()
+    written = []
+    for index in range(1, count + 1):
+        base = folder / f"plan_{index}"
+        existing = find_output(base, IMAGE_SUFFIXES)
+        if existing and existing.stat().st_mtime >= storyboard:
+            continue
+        for old in IMAGE_SUFFIXES:
+            base.with_name(base.name + old).unlink(missing_ok=True)
+        path = base.with_name(base.name + image.suffix.lower())
+        write_atomic(path, data)
+        written.append(path)
+    return written
 
 
 def shot_jobs(image: Path, folder: Path, shots: list[Shot]) -> list[Job]:
@@ -241,23 +263,35 @@ def upscaled_version(project: Project, path: Path) -> Path | None:
     return upscaled if upscaled and upscaled.stat().st_mtime >= path.stat().st_mtime else None
 
 
-def motion_for(project: Project, source: Path) -> str | None:
-    """Mouvement de caméra prévu par le storyboard pour ce plan, s'il en vient."""
+def planned(project: Project, source: Path) -> tuple[str | None, str | None]:
+    """Mouvement de caméra et ambiance prévus par le storyboard pour ce plan, s'il en vient."""
     key = output_key(project, source)
     match = re.fullmatch(r"plan_(\d+)", key.name)
     if len(key.parts) != 3 or key.parts[0] != "storyboard" or not match:
-        return None
-    shots = load_storyboard(project.output / key.parent)
+        return None, None
+    folder = project.output / key.parent
+    shots = load_storyboard(folder)
     index = int(match.group(1)) - 1
-    return shots[index].motion if shots and index < len(shots) else None
+    if not shots or index >= len(shots):
+        return None, None
+    ambiance = json.loads((folder / "storyboard.json").read_text(encoding="utf-8")).get("ambiance")
+    return shots[index].motion, ambiance if ambiance in prompts.AMBIANCES else None
 
 
-def video_jobs(project: Project, settings: Settings, sources: list[Path], motion: str | None) -> list[Job]:
+def clip_prompt(project: Project, source: Path, motion: str | None, ambiance: str | None) -> str:
+    """Consigne vidéo d'une image : ce qui est imposé en ligne de commande, sinon ce que prévoit le storyboard."""
+    planned_motion, planned_ambiance = planned(project, source)
+    return prompts.video_prompt(motion or planned_motion,
+                                ambiance or planned_ambiance or prompts.DEFAULT_AMBIANCE)
+
+
+def video_jobs(project: Project, settings: Settings, sources: list[Path], motion: str | None,
+               ambiance: str | None = None) -> list[Job]:
     """Vidéos par fal.ai (Kling ou Seedance)."""
     jobs = []
     for source in sources:
         target = project.output / "videos" / output_key(project, source)
-        prompt = prompts.video_prompt(motion or motion_for(project, source))
+        prompt = clip_prompt(project, source, motion, ambiance)
         jobs.append(Job(f"vidéo {output_key(project, source).as_posix()} ({settings.video_seconds} s)",
                         [target], VIDEO_SUFFIXES,
                         lambda provider, source=source, target=target, prompt=prompt:
@@ -267,21 +301,33 @@ def video_jobs(project: Project, settings: Settings, sources: list[Path], motion
 
 
 FLOW_HEADER = """\
-Vidéos à faire dans Flow (https://labs.google/flow), inclus dans l'abonnement Google AI Pro.
+Vidéos à faire dans Flow (https://labs.google/flow), payées par les crédits de l'abonnement Google AI Pro.
 
-Pour chaque plan ci-dessous : dans Flow, choisir le mode « Frames to Video » (images vers vidéo),
-importer l'image indiquée comme première image, coller le texte du plan, puis lancer.
-Ranger les vidéos téléchargées dans ce dossier, sous le nom indiqué.
+Pour chaque plan ci-dessous :
+1. Dans Flow, choisir le mode « Images vers vidéo » (« Frames to Video » si Flow est en anglais),
+   format vertical 9:16 pour les réseaux sociaux, une seule vidéo par demande (pour ne pas payer double).
+2. Importer l'image indiquée comme première image, coller le texte du plan, lancer.
+3. Tester d'abord avec Veo 3.1 Lite (10 crédits le clip, environ 100 clips par mois avec l'abonnement) ;
+   refaire avec Fast ou Quality (plus cher) seulement les plans réussis.
+4. Agrandir la vidéo retenue en 1080p dans Flow : c'est gratuit avec l'abonnement.
+5. Pour faire entrer une personne dans la scène (vous-même, un client), le mode « Ingrédients vers vidéo »
+   (« Ingredients to Video ») accepte sa photo en plus de l'image du lieu : ajoutez-la et décrivez ce qu'elle
+   fait (« une femme traverse tranquillement l'espace de gauche à droite »).
+6. Ranger chaque vidéo téléchargée sous le nom indiqué : relancer la commande ne la refera pas.
+
+Si Veo suit mal une consigne, demandez à Gemini de la traduire en anglais : Google indique que Flow
+comprend le français mais donne de meilleurs résultats en anglais.
+Le filigrane visible se désactive dans Flow (menu sous la photo de profil, réglage « Visible watermarking »).
 """
 
 
-def write_flow_sheet(project: Project, sources: list[Path], motion: str | None) -> Path:
+def write_flow_sheet(project: Project, sources: list[Path], motion: str | None, ambiance: str | None = None) -> Path:
     """Fiche à suivre dans Flow : une image et un texte à coller par plan (aucun appel payant)."""
     blocks = [FLOW_HEADER]
     for index, source in enumerate(sources, start=1):
         key = output_key(project, source)
         blocks.append(f"--- {index}. {key.as_posix()} (vidéo à ranger sous sorties/videos/{key.as_posix()}.mp4)\n"
-                      f"Image : {source}\n\n{prompts.video_prompt(motion or motion_for(project, source))}\n")
+                      f"Image : {source}\n\n{clip_prompt(project, source, motion, ambiance)}\n")
     path = project.output / "videos" / "a_faire_dans_flow.txt"
     write_atomic(path, "\n".join(blocks).encode("utf-8"))
     return path

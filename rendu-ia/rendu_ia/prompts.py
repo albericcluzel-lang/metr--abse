@@ -1,11 +1,12 @@
-"""La recette du rendu : consignes envoyées aux modèles, tirées de l'analyse de la vidéo de référence.
+"""La recette du rendu : consignes envoyées aux modèles, tirées de l'analyse des deux vidéos de référence.
 
-Les consignes sont en anglais, la langue dans laquelle ces modèles suivent le mieux les
-instructions. Le texte de `ambiance.txt` peut rester en français.
+Le look visé (première vidéo) : photo d'intérieur de magazine, fin d'après-midi, soleil bas qui passe à
+travers les stores et dessine des rayures sur le parquet, spots allumés en blanc chaud, chêne naturel,
+murs grège mats, rendu couleur Fujifilm, verticales droites.
 
-Le look visé (vidéo de référence) : photo d'intérieur de magazine, fin d'après-midi, soleil bas
-qui passe à travers les stores et dessine des rayures sur le parquet, spots allumés en blanc chaud,
-chêne naturel, murs grège mats, rendu couleur Fujifilm, verticales droites.
+Les consignes vidéo (deuxième vidéo) : ne jamais redécrire l'architecture, décrire seulement le mouvement
+de caméra (vue FPV, vol traversant, travelling avant, très lent), son intensité et l'ambiance (calme et
+contemplation, ou vent et dynamisme), et demander de garder strictement la géométrie.
 """
 from __future__ import annotations
 
@@ -16,49 +17,51 @@ from dataclasses import dataclass
 # --- Rendu photo à partir d'une capture 3D Archicad --------------------------------------------
 
 GEOMETRY_LOCK = (
-    "Image 1 is a screenshot of the project's 3D model (ArchiCAD). It is the reference for everything "
-    "that is built. Keep exactly the same camera position, viewing angle, focal length and framing; the "
-    "same room geometry, walls, ceiling heights, beams, columns, openings, windows and doors; and the same "
-    "furniture, light fittings, objects and artworks, in the same places, with the same shapes, sizes and "
-    "colours. Do not add, remove, move or resize any architectural element or piece of furniture. "
-    "Ignore the look of the 3D software: flat grey surfaces, missing textures, hard CG edges, black "
-    "outlines, flat 2D cut-out plants or people, and any interface element."
+    "L'image 1 est une capture de la maquette 3D du projet (Archicad). Elle fait foi pour tout ce qui est "
+    "construit. Garde exactement la même position de caméra, le même angle de vue, la même focale et le "
+    "même cadrage ; la même géométrie des pièces, des murs, des hauteurs sous plafond, des poutres, des "
+    "poteaux, des baies, des fenêtres et des portes ; et le même mobilier, les mêmes luminaires, objets et "
+    "tableaux, aux mêmes endroits, avec les mêmes formes, tailles et couleurs. N'ajoute, ne retire, ne "
+    "déplace et ne redimensionne aucun élément d'architecture ni aucun meuble. Ignore l'aspect du logiciel "
+    "3D : surfaces grises unies, textures manquantes, arêtes trop nettes, contours noirs, plantes ou "
+    "personnages en découpe 2D, éléments d'interface."
 )
 
 MATERIALS = (
-    "Materials: turn every surface into a real material with natural imperfections. Where the 3D model "
-    "shows a material or a colour, keep it and make it real (a wood texture becomes real wood of the same "
-    "tone and pattern, a coloured cabinet keeps its colour). Where a surface is plain grey or untextured, "
-    "use: natural oak floor with visible grain and a satin finish, warm greige matte painted walls, white "
-    "matte ceiling. Real fabrics (boucle, wool, linen, leather) with folds and texture, powder-coated or "
-    "brushed metal, real glass with reflections, real plants with natural leaves. Styling: lived-in but "
-    "tidy (books, records, ceramics, plants), no clutter."
+    "Matériaux : transforme chaque surface en un vrai matériau, avec ses imperfections naturelles. Quand la "
+    "maquette montre un matériau ou une couleur, garde-le et rends-le réel (une texture bois devient un vrai "
+    "bois du même ton et du même dessin, un meuble coloré garde sa couleur). Quand une surface est grise ou "
+    "sans texture, utilise : parquet en chêne naturel au veinage visible et à la finition satinée, murs "
+    "peints grège chaud mat, plafond blanc mat. Vrais tissus (bouclette, laine, lin, cuir) avec plis et "
+    "texture, métal laqué ou brossé, vrai verre avec reflets, vraies plantes aux feuilles naturelles. "
+    "Décoration : lieu habité mais rangé (livres, vinyles, céramiques, plantes), sans encombrement."
 )
 
 LIGHT = (
-    "Light: late-afternoon low sun. Warm direct sunlight comes through the windows and, where there are "
-    "blinds, filters through them and casts crisp striped light patterns across the floor, rug and "
-    "furniture. Soft warm bounce light fills the room. Recessed downlights and track spots are on, with a "
-    "gentle warm 2700 K glow and soft light scallops on the walls. Balanced exposure: the windows are "
-    "bright but not burnt out."
+    "Lumière : fin d'après-midi, soleil bas. La lumière chaude du soleil entre par les fenêtres et, là où il "
+    "y a des stores, passe à travers en dessinant des rayures nettes sur le sol, le tapis et le mobilier. "
+    "Une lumière chaude et douce, renvoyée par les surfaces, remplit la pièce. Les spots encastrés et les "
+    "rails sont allumés, avec une lueur chaude de 2700 K et de légers halos sur les murs. Exposition "
+    "équilibrée : les fenêtres sont lumineuses sans être brûlées."
 )
 
 PHOTO_STYLE = (
-    "Photography: high-end interior design editorial photograph, as published in an architecture "
-    "magazine. Fujifilm medium-format camera with natural Fujifilm colour close to Classic Chrome: warm, "
-    "slightly muted, natural tones, soft highlight roll-off, deep but open shadows, very fine film-like "
-    "grain. Vertical lines perfectly straight. Sharp, realistic textures: no CGI look, no "
-    "over-saturation, no HDR halos."
+    "Photographie : photo d'architecture intérieure haut de gamme, comme publiée dans un magazine "
+    "d'architecture. Appareil moyen format Fujifilm, couleurs naturelles Fujifilm proches de Classic "
+    "Chrome : tons chauds, légèrement désaturés, naturels, hautes lumières douces, ombres profondes mais "
+    "lisibles, grain très fin façon pellicule. Verticales parfaitement droites. Textures nettes et réalistes : "
+    "aucun aspect image de synthèse, pas de sursaturation, pas de halos HDR."
 )
 
 PEOPLE = (
-    "People: add one or two people in casual, neutral-toned clothes, naturally going about their day "
-    "(reading, walking, looking out of the window), photographed candidly and not looking at the camera. "
-    "They must not hide the main architectural features."
+    "Personnages : ajoute une ou deux personnes en vêtements simples aux tons neutres, occupées "
+    "naturellement (lire, marcher, regarder par la fenêtre), prises sur le vif sans regarder l'objectif. "
+    "Elles ne doivent pas cacher les éléments d'architecture importants."
 )
 
 SINGLE_IMAGE = (
-    "Output a single photograph: no text, no caption, no watermark, no border, no split screen, no collage."
+    "Produis une seule photographie : pas de texte, pas de légende, pas de filigrane, pas de bordure, pas "
+    "d'écran partagé, pas de montage de plusieurs images."
 )
 
 
@@ -72,25 +75,25 @@ def render_prompt(*, master: bool, references: list[str], brief: str | None, peo
     index = 2
     if master:
         parts.append(
-            f"Image {index} is the approved master image of the project: match its materials, colour "
-            "palette, light, white balance and photographic style exactly, so that all the images look "
-            "like the same photo shoot in the same home. Take only the style from it, never its framing "
-            "or its furniture layout."
+            f"L'image {index} est l'image maître validée du projet : reprends exactement ses matériaux, sa "
+            "palette de couleurs, sa lumière, sa balance des blancs et son style photographique, pour que "
+            "toutes les images semblent venir de la même séance photo dans le même lieu. Prends-lui seulement "
+            "son style, jamais son cadrage ni la disposition de ses meubles."
         )
         index += 1
     if references:
-        listed = "; ".join(f"image {index + offset}: {name}" for offset, name in enumerate(references))
+        listed = " ; ".join(f"image {index + offset} : {name}" for offset, name in enumerate(references))
         parts.append(
-            "The following images are references for materials and atmosphere. Use each one where its name "
-            f"says, without copying its framing or its objects: {listed}."
+            "Les images suivantes sont des références de matériaux et d'ambiance. Utilise chacune là où son nom "
+            f"l'indique, sans copier son cadrage ni ses objets : {listed}."
         )
     parts += [MATERIALS, LIGHT, PHOTO_STYLE]
     if people:
         parts.append(PEOPLE)
     if brief:
         parts.append(
-            "Project brief from the architect. Follow it; it takes priority over the default materials "
-            f"and light above:\n{brief}"
+            "Consignes de l'architecte pour ce projet. Respecte-les : elles passent avant les matériaux et la "
+            f"lumière par défaut décrits plus haut.\n{brief}"
         )
     parts.append(SINGLE_IMAGE)
     return "\n\n".join(parts)
@@ -99,68 +102,100 @@ def render_prompt(*, master: bool, references: list[str], brief: str | None, peo
 # --- Upscale par régénération (fournisseur Gemini, qui n'a pas de modèle d'upscale) -------------
 
 UPSCALE_PROMPT = "\n\n".join([
-    "Reproduce image 1 exactly, at a higher resolution. Keep the composition, framing, perspective, every "
-    "object, material, colour, light and shadow strictly identical. Only add the fine detail, texture and "
-    "sharpness of a high-resolution photograph: no change, no addition, no removal, no new style.",
+    "Reproduis l'image 1 à l'identique, en plus haute définition. Garde strictement la même composition, le "
+    "même cadrage, la même perspective, et chaque objet, matériau, couleur, lumière et ombre à l'identique. "
+    "Ajoute seulement la finesse de détail, la texture et la netteté d'une photo haute définition : aucun "
+    "changement, aucun ajout, aucune suppression, aucun nouveau style.",
     SINGLE_IMAGE,
 ])
 
 
-# --- Storyboard : plans cinématiques tirés de l'image maître ------------------------------------
+# --- Ambiances vidéo (deuxième vidéo : « du vent, du dynamisme, ou au contraire du calme ») -------
+
+AMBIANCES = {
+    "calme": "contemplation, haut de gamme, aucune agitation, mouvement extrêmement lent et posé",
+    "dynamique": "un peu de vent dans la végétation et les tissus, mouvement de caméra plus franc, énergie d'une "
+                 "ville vivante",
+}
+DEFAULT_AMBIANCE = "calme"
+
+# Style du mouvement dans la consigne vidéo, selon l'ambiance.
+VIDEO_STYLES = {
+    "calme": "Mouvement de caméra extrêmement lent, fluide et stabilisé, à vitesse constante, comme sur un "
+             "stabilisateur ou un rail. Seulement une vie discrète et naturelle : reflets du soleil, feuilles qui "
+             "bougent à peine.",
+    "dynamique": "Mouvement de caméra fluide et stabilisé, plus franc, avec de l'élan, sans à-coups. Du vent fait "
+                 "bouger la végétation et les tissus ; la vie autour du lieu est visible mais naturelle.",
+}
+
+
+# --- Storyboard : plans cinématiques tirés d'une image ------------------------------------------
 
 @dataclass(frozen=True)
 class Shot:
-    title: str    # titre court en français, pour s'y retrouver
+    title: str    # titre court, pour s'y retrouver
     image: str    # cadrage et contenu du plan (consigne pour l'image)
     motion: str   # mouvement de caméra et vie dans l'image (consigne pour la vidéo)
 
 
 STORYBOARD_SYSTEM = (
-    "You are a cinematographer and an interior photographer. You prepare short presentation films of "
-    "interior design projects, shot with a Fujifilm camera. You answer with JSON only."
+    "Tu es directeur de la photographie et photographe d'architecture. Tu prépares de courts films de "
+    "présentation de projets d'architecture et d'architecture intérieure, tournés avec un appareil Fujifilm. "
+    "Tu réponds uniquement en JSON, et tous les textes de ta réponse sont en français."
 )
 
-STORYBOARD_REQUEST = """Write a storyboard of {count} cinematic shots of the room in the attached image, shot with a Fujifilm camera.
+STORYBOARD_REQUEST = """Écris un storyboard de {count} plans cinématiques du lieu visible sur l'image jointe.
 
-Rules:
-- Every shot shows THIS SAME room, with the same architecture, materials, furniture, light and time of day.
-- Vary shot sizes and angles: a wide establishing shot, a medium shot, close-up details of materials or objects that are visible in the image, a side or reverse angle.
-- Only show what exists in the image, or what plausibly continues it just outside the frame. Never invent or change furniture.
-- Each shot will become a 5-second video clip: plan one slow, smooth camera movement per shot (dolly in or out, lateral slide, slow pan or tilt, gentle parallax) and subtle natural life (sunlight shimmer, leaves moving).
+Règles :
+- Chaque plan montre CE MÊME lieu, avec la même architecture, les mêmes matériaux, le même mobilier, la même lumière et le même moment de la journée.
+- Varie les types de plans : scène d'entrée (on s'approche ou on entre), plan large d'ensemble, vol traversant en vue FPV à travers l'espace, détails de matières ou d'objets visibles sur l'image, scène de sortie (on recule ou on s'élève), éventuellement un accéléré (timelapse) où la lumière évolue, caméra fixe.
+- Ne montre que ce qui existe sur l'image, ou ce qui la prolonge de façon plausible juste hors du cadre. N'invente et ne modifie jamais de mobilier.
+- Chaque plan deviendra un clip vidéo de 5 secondes. Pour la consigne de mouvement : NE REDÉCRIS PAS l'architecture (le modèle vidéo la voit déjà sur l'image). Décris seulement le mouvement de caméra avec des mots précis (vue FPV, vol traversant, travelling avant ou arrière, glissement latéral, panoramique, élévation, caméra fixe), sa vitesse et son intensité avec des adjectifs (extrêmement lent, posé, fluide, stabilisé), et la vie discrète dans le plan (reflets du soleil, feuilles qui bougent, passants). Termine par : « Garde strictement la géométrie, aucun autre changement dans la scène. »
+- Ambiance voulue : {name} ({ambiance}).{same_image}
 
-Answer with this JSON only:
-{{"shots": [{{"title": "short title in French, 3 to 6 words", "image": "English description of the framing and of what is visible", "motion": "English description of the camera movement and of the subtle life in the shot"}}]}}"""
+Réponds uniquement avec ce JSON :
+{{"plans": [{{"titre": "titre court, 3 à 6 mots", "image": "description du cadrage et de ce qu'on voit", "mouvement": "consigne de mouvement pour la vidéo, comme décrit plus haut"}}]}}"""
 
-# Plans utilisés quand aucun modèle de texte n'est réglé (RENDU_MODELE_LLM=aucun).
+# Plans utilisés quand aucun modèle de texte n'est réglé (RENDU_MODELE_LLM=aucun ou RENDU_GEMINI_MODELE_TEXTE=aucun).
 DEFAULT_SHOTS = (
-    Shot("Plan large d'ensemble",
-         "wide establishing shot of the whole room from a corner, eye level, showing the main volumes and the windows",
-         "slow dolly-in towards the centre of the room, eye level"),
-    Shot("Plan moyen sur le coin salon",
-         "medium shot of the main seating area, slightly lower camera height, foreground furniture gently framing the view",
-         "slow lateral slide from left to right with gentle parallax between foreground and background"),
+    Shot("Scène d'entrée",
+         "plan large depuis l'entrée du lieu, à hauteur d'œil, avec les volumes principaux et les fenêtres",
+         "travelling avant vers le cœur du lieu, à hauteur d'œil"),
+    Shot("Vol traversant",
+         "plan moyen à travers l'espace principal, caméra un peu plus basse, premier plan qui cadre la vue",
+         "vol traversant en vue FPV qui glisse à travers l'espace, avec un léger effet de profondeur entre le "
+         "premier plan et le fond"),
     Shot("Détail matière et lumière",
-         "close-up detail of a material or object lit by the sunlight (floor, fabric, plant, shelf), shallow depth of field",
-         "very slow push-in on the detail, sunlight stripes shimmering softly, leaves moving gently"),
-    Shot("Contrechamp vers la fenêtre",
-         "reverse angle looking towards the windows and the light, sunlight entering the room",
-         "slow tilt up from the floor to the window, dust particles floating in the light"),
+         "gros plan sur une matière ou un objet éclairé par le soleil, faible profondeur de champ",
+         "approche douce vers le détail, la lumière joue sur la matière"),
+    Shot("Scène de sortie",
+         "contrechamp vers l'extérieur et la lumière",
+         "travelling arrière qui s'élève doucement pour révéler l'ensemble"),
 )
 
 
-def storyboard_request(count: int) -> str:
-    return STORYBOARD_REQUEST.format(count=count)
+SAME_IMAGE_RULE = (
+    "\n- Tous les plans partent exactement de cette image, avec son cadrage : varie seulement le mouvement de "
+    "caméra, son intensité et le type de scène. Le champ « image » rappelle simplement ce qu'on voit au départ."
+)
+
+
+def storyboard_request(count: int, ambiance: str = DEFAULT_AMBIANCE, same_image: bool = False) -> str:
+    """`same_image` : chaque plan sera animé à partir de l'image de départ elle-même (pas d'image par plan)."""
+    return STORYBOARD_REQUEST.format(count=count, name=ambiance, ambiance=AMBIANCES[ambiance],
+                                     same_image=SAME_IMAGE_RULE if same_image else "")
 
 
 def shot_prompt(shot: Shot) -> str:
-    """Consigne pour fabriquer l'image d'un plan à partir de l'image maître (image 1)."""
+    """Consigne pour fabriquer l'image d'un plan à partir de l'image de départ (image 1)."""
     return "\n\n".join([
-        "Image 1 is the approved master photograph of an interior design project. Create another photograph "
-        "of the SAME room, as if taken during the same photo shoot a few minutes later, for a cinematic "
-        f"storyboard.\nShot: {shot.image}",
-        "Keep exactly the same architecture, materials, furniture, artworks, colours, light direction, time of "
-        "day and colour grading as image 1. Only show what exists in image 1, or what plausibly continues it "
-        "just outside its frame; never change or add furniture.",
+        "L'image 1 est la photo validée d'un projet d'architecture. Crée une autre photo du MÊME lieu, comme "
+        "prise pendant la même séance photo quelques minutes plus tard, pour un storyboard cinématique.\n"
+        f"Plan : {shot.image}",
+        "Garde exactement la même architecture, les mêmes matériaux, le même mobilier, les mêmes œuvres, les "
+        "mêmes couleurs, la même direction de lumière, le même moment de la journée et le même étalonnage que "
+        "l'image 1. Ne montre que ce qui existe sur l'image 1, ou ce qui la prolonge de façon plausible juste "
+        "hors du cadre ; ne modifie ni n'ajoute jamais de mobilier.",
         PHOTO_STYLE,
         SINGLE_IMAGE,
     ])
@@ -172,37 +207,38 @@ def parse_storyboard(text: str, count: int) -> list[Shot]:
     if not match:
         raise ValueError("la réponse ne contient pas de JSON")
     data = json.loads(match.group(0))
-    items = data.get("shots") if isinstance(data, dict) else None
+    items = data.get("plans") if isinstance(data, dict) else None
     if not isinstance(items, list) or not items:
-        raise ValueError("la réponse ne contient pas de liste « shots »")
+        raise ValueError("la réponse ne contient pas de liste « plans »")
     shots = []
     for item in items[:count]:
         if not isinstance(item, dict) or not str(item.get("image", "")).strip():
             raise ValueError(f"plan mal formé : {item!r}")
         shots.append(Shot(
-            title=str(item.get("title", "")).strip() or f"Plan {len(shots) + 1}",
+            title=str(item.get("titre", "")).strip() or f"Plan {len(shots) + 1}",
             image=str(item["image"]).strip(),
-            motion=str(item.get("motion", "")).strip() or DEFAULT_MOTION,
+            motion=str(item.get("mouvement", "")).strip() or DEFAULT_MOTION,
         ))
     return shots
 
 
 # --- Vidéo : animation d'une image ---------------------------------------------------------------
 
-DEFAULT_MOTION = "slow dolly-in towards the centre of the room, eye level"
+DEFAULT_MOTION = "travelling avant vers le cœur du lieu, à hauteur d'œil"
 
 VIDEO_RULES = (
-    "Cinematic interior video: slow, smooth, stabilised camera movement at constant speed, like a gimbal "
-    "or a slider. The architecture, furniture and materials stay perfectly rigid and identical to the first "
-    "frame: no morphing, no warping, nothing appearing or disappearing. Subtle natural life only: sunlight "
-    "shimmering, leaves moving gently, dust floating in the light. Photorealistic, natural Fujifilm colour."
+    "Vidéo d'architecture cinématique. Garde strictement la géométrie : l'architecture, le mobilier et les "
+    "matériaux restent parfaitement rigides et identiques à la première image, sans déformation, sans "
+    "ondulation, sans rien qui apparaisse ou disparaisse. Rendu photoréaliste, couleurs naturelles Fujifilm. "
+    "Aucun autre changement dans la scène."
 )
 
 NEGATIVE_VIDEO = (
-    "morphing, warping, bending walls, distorted furniture, flickering, objects appearing or disappearing, "
-    "fast camera movement, shaky camera, text, watermark, blur, low quality"
+    "déformation, morphing, murs qui se tordent, mobilier déformé, scintillement, objets qui apparaissent ou "
+    "disparaissent, mouvement de caméra rapide, caméra qui tremble, texte, filigrane, flou, mauvaise qualité"
 )
 
 
-def video_prompt(motion: str | None) -> str:
-    return f"Camera: {motion or DEFAULT_MOTION}.\n\n{VIDEO_RULES}"
+def video_prompt(motion: str | None, ambiance: str = DEFAULT_AMBIANCE) -> str:
+    return (f"Caméra : {motion or DEFAULT_MOTION}.\n\nAmbiance {ambiance} : {AMBIANCES[ambiance]}.\n\n"
+            f"{VIDEO_STYLES[ambiance]}\n\n{VIDEO_RULES}")

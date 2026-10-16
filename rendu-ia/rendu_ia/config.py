@@ -83,6 +83,11 @@ class Settings:
         return DEFAULT_IMAGE_LIMITS
 
     @property
+    def has_key(self) -> bool:
+        """Clé API du fournisseur choisi présente."""
+        return bool(self.gemini_key if self.provider == "gemini" else self.fal_key)
+
+    @property
     def text_model(self) -> str | None:
         """Modèle qui écrit le storyboard chez le fournisseur choisi (None : plans types)."""
         return self.gemini_text_model if self.provider == "gemini" else self.llm_model

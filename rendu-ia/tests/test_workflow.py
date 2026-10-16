@@ -9,9 +9,9 @@ from rendu_ia.service import VISION_ENDPOINT, FalProvider, ServiceError
 
 from .conftest import FakeFal, make_image
 
-STORYBOARD = json.dumps({"shots": [
-    {"title": "Plan large", "image": "wide shot", "motion": "slow dolly-in"},
-    {"title": "Détail parquet", "image": "close-up of the floor", "motion": "slow push-in on the floor"},
+STORYBOARD = json.dumps({"plans": [
+    {"titre": "Plan large", "image": "plan large", "mouvement": "travelling avant très lent"},
+    {"titre": "Détail parquet", "image": "gros plan sur le parquet", "mouvement": "approche lente vers le parquet"},
 ]})
 
 
@@ -69,7 +69,7 @@ def test_essais_then_master_then_rendus(project, fake):
     endpoint, arguments = fake.calls[0]
     assert arguments["image_urls"] == ["https://cdn.test/cuisine.jpg", "https://cdn.test/maitre.png",
                                        "https://cdn.test/sol - parquet chene point de hongrie.jpg"]
-    assert "Image 2 is the approved master image" in arguments["prompt"]
+    assert "L'image 2 est l'image maître validée" in arguments["prompt"]
     assert (project.output / "rendus" / "cuisine.png").is_file()
 
     fake.calls.clear()
@@ -125,7 +125,7 @@ def test_storyboard_then_upscale_then_video_follow_the_planned_motion(project, f
     assert set(videos) == {"https://cdn.test/plan_1.png", "https://cdn.test/plan_2.png"}
     assert all(upload.parent.parts[-3:-1] == ("upscale", "storyboard") for upload in fake.uploads[-2:])
     prompts_sent = sorted(arguments["prompt"] for arguments in videos.values())
-    assert "slow dolly-in" in prompts_sent[0] and "slow push-in on the floor" in prompts_sent[1]
+    assert "approche lente vers le parquet" in prompts_sent[0] and "travelling avant très lent" in prompts_sent[1]
     first = next(iter(videos.values()))
     assert first["duration"] == "5" and first["generate_audio"] is False
     assert (project.output / "videos" / "storyboard" / "maitre" / "plan_1.mp4").is_file()
@@ -149,13 +149,13 @@ def test_unreadable_storyboard_is_reported(project, monkeypatch, capsys):
 
 def test_video_with_seedance_and_custom_motion(project, fake):
     make_image(project.output / "rendus" / "salon.png")
-    assert run("video", project.root, "--modele", "seedance", "--duree", "8", "--mouvement", "slow pan right",
+    assert run("video", project.root, "--modele", "seedance", "--duree", "8", "--mouvement", "panoramique lent vers la droite",
                "--apply") == 0
     endpoint, arguments = fake.calls[0]
     assert endpoint == "bytedance/seedance-2.0/image-to-video"
     assert arguments["image_url"] == "https://cdn.test/salon.png"
     assert arguments["duration"] == "8" and arguments["resolution"] == "720p"
-    assert "slow pan right" in arguments["prompt"]
+    assert "panoramique lent vers la droite" in arguments["prompt"]
 
 
 def test_video_duration_is_checked_against_the_model(project, fake, capsys):
@@ -256,3 +256,54 @@ def test_upscale_and_video_follow_a_redone_render(project, fake):
     assert fake.uploads == [project.output / "rendus" / "salon.png"]  # pas l'ancienne version upscalée
     assert run("upscale", project.root, "--apply") == 0
     assert fake.calls[-1][0] == "fal-ai/seedvr/upscale/image"
+
+
+def test_storyboard_ambiance_is_kept_for_the_videos(project, fake):
+    etapes.lock_master(project, make_image(project.root / "choix.png"))
+    assert run("storyboard", project.root, "--plans", "2", "--ambiance", "dynamique", "--apply") == 0
+    assert prompts.AMBIANCES["dynamique"] in fake.calls[0][1]["prompt"]
+    saved = json.loads((project.output / "storyboard" / "maitre" / "storyboard.json").read_text(encoding="utf-8"))
+    assert saved["ambiance"] == "dynamique"
+    fake.calls.clear()
+    assert run("video", project.root, "--apply") == 0
+    assert all(prompts.AMBIANCES["dynamique"] in arguments["prompt"] for _, arguments in fake.calls)
+    fake.calls.clear()
+    assert run("video", project.root, "--ambiance", "calme", "--refaire", "--apply") == 0
+    assert all(prompts.AMBIANCES["calme"] in arguments["prompt"] for _, arguments in fake.calls)
+
+
+def test_flow_sheet_lists_only_missing_videos(project, capsys):
+    make_image(project.output / "rendus" / "salon.png")
+    make_image(project.output / "rendus" / "cuisine.png")
+    age_project(project)
+    (project.output / "videos" / "rendus").mkdir(parents=True)
+    (project.output / "videos" / "rendus" / "salon.mp4").write_bytes(b"video")
+    assert run("video", project.root) == 0
+    sheet = (project.output / "videos" / "a_faire_dans_flow.txt").read_text(encoding="utf-8")
+    assert "rendus/cuisine" in sheet and "rendus/salon" not in sheet
+    assert "Images vers vidéo" in sheet and "Garde strictement la géométrie" in sheet
+    (project.output / "videos" / "rendus" / "cuisine.mp4").write_bytes(b"video")
+    capsys.readouterr()
+    assert run("video", project.root) == 0
+    assert "Toutes les vidéos sont déjà" in capsys.readouterr().out
+
+
+def test_command_line_errors_are_in_french(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["essais"])
+    assert "arguments obligatoires manquants : projet" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["video", "p", "--ambiance", "nerveuse"])
+    assert "choix impossible" in capsys.readouterr().err
+
+
+def test_without_images_and_without_any_key_uses_default_shots(project, monkeypatch, capsys):
+    def no_provider(settings):
+        raise AssertionError("sans clé, rien n'est envoyé")
+    monkeypatch.setattr(cli, "make_provider", no_provider)
+    image = make_image(project.root / "rendu.png")
+    assert run("storyboard", project.root, "--image", image, "--plans", "6", "--sans-images", "--apply") == 0
+    assert "Pas de clé API" in capsys.readouterr().out
+    assert len(list((project.output / "storyboard" / "rendu").glob("plan_*"))) == len(prompts.DEFAULT_SHOTS)
+    assert run("video", project.root) == 0
+    assert (project.output / "videos" / "a_faire_dans_flow.txt").is_file()

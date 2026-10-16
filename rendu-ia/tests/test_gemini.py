@@ -14,9 +14,9 @@ from rendu_ia.service import ServiceError
 
 from .conftest import make_image
 
-STORYBOARD = json.dumps({"shots": [
-    {"title": "Plan large", "image": "wide shot", "motion": "slow dolly-in"},
-    {"title": "Détail parquet", "image": "close-up of the floor", "motion": "slow push-in on the floor"},
+STORYBOARD = json.dumps({"plans": [
+    {"titre": "Plan large", "image": "plan large", "mouvement": "travelling avant très lent"},
+    {"titre": "Détail parquet", "image": "gros plan sur le parquet", "mouvement": "approche lente vers le parquet"},
 ]})
 
 
@@ -213,7 +213,7 @@ def test_whole_workflow_with_gemini_and_flow(settings, project, monkeypatch, cap
     assert run("rendus", project.root, "--apply") == 0
     rendu = google.bodies()[-1]["contents"][0]["parts"]
     assert len(rendu) == 4   # consigne, capture de la cuisine, image maître, référence
-    assert "Image 2 is the approved master image" in rendu[0]["text"]
+    assert "L'image 2 est l'image maître validée" in rendu[0]["text"]
     assert run("storyboard", project.root, "--plans", "2", "--apply") == 0
     assert run("upscale", project.root, "--apply") == 0
     assert (project.output / "upscale" / "storyboard" / "maitre" / "plan_2.png").is_file()
@@ -224,7 +224,7 @@ def test_whole_workflow_with_gemini_and_flow(settings, project, monkeypatch, cap
     assert len(google.requests) == count
     sheet = (project.output / "videos" / "a_faire_dans_flow.txt").read_text(encoding="utf-8")
     assert "Frames to Video" in sheet
-    assert "slow dolly-in" in sheet and "slow push-in on the floor" in sheet
+    assert "travelling avant très lent" in sheet and "approche lente vers le parquet" in sheet
     assert str(project.output / "upscale" / "storyboard" / "maitre" / "plan_1.png") in sheet
     assert "Flow" in capsys.readouterr().out
 
@@ -265,8 +265,8 @@ def test_free_model_gets_only_the_references_it_accepts(monkeypatch, project, ca
     assert "n'en accepte que 1" in capsys.readouterr().out
     parts = google.bodies()[-1]["contents"][0]["parts"]
     assert len(parts) == 4   # consigne, capture, image maître et 1 seule référence
-    assert "image 3: sol - parquet chene point de hongrie" in parts[0]["text"]
-    assert "tissu" not in parts[0]["text"]
+    assert "image 3 : sol - parquet chene point de hongrie" in parts[0]["text"]
+    assert "tissu - bouclette" not in parts[0]["text"]
 
 
 def test_free_model_cannot_upscale(monkeypatch, project, capsys):
@@ -285,3 +285,40 @@ def test_daily_quota_stops_everything_without_retrying(settings, project, tmp_pa
     with pytest.raises(FatalError, match="Quota du jour"):
         google.provider(settings).generate_images("P", project.captures()[:1], [tmp_path / "a"])
     assert google.sleeps == []
+
+
+def test_free_path_existing_image_to_flow_sheet(settings, project, monkeypatch, tmp_path, capsys):
+    """Parcours gratuit : une image existante, les consignes par le modèle de texte gratuit, la fiche Flow."""
+    google = FakeGoogle()
+    monkeypatch.setattr(cli, "make_provider", google.provider)
+    facade = make_image(tmp_path / "images agence" / "facade.jpg", size=(1080, 1920))
+    assert cli.main(["storyboard", str(project.root), "--image", str(facade), "--plans", "2",
+                     "--sans-images", "--apply"]) == 0
+    assert len(google.requests) == 1
+    assert google.requests[0].url.path == "/v1beta/models/gemini-3.5-flash:generateContent"
+    assert "Tous les plans partent exactement de cette image" in google.bodies()[0]["contents"][0]["parts"][0]["text"]
+    folder = project.output / "storyboard" / "facade"
+    assert [path.read_bytes() == facade.read_bytes() for path in sorted(folder.glob("plan_*"))] == [True, True]
+
+    assert cli.main(["storyboard", str(project.root), "--image", str(facade), "--sans-images", "--apply"]) == 0
+    assert len(google.requests) == 1   # storyboard et plans déjà à jour : rien n'est redemandé
+
+    assert cli.main(["video", str(project.root)]) == 0
+    sheet = (project.output / "videos" / "a_faire_dans_flow.txt").read_text(encoding="utf-8")
+    assert "storyboard/facade/plan_1" in sheet and "storyboard/facade/plan_2" in sheet
+    assert "travelling avant très lent" in sheet and "approche lente vers le parquet" in sheet
+    assert len(google.requests) == 1
+
+
+def test_without_images_needs_no_key_with_default_shots(project, monkeypatch, capsys):
+    monkeypatch.setenv("RENDU_GEMINI_MODELE_TEXTE", "aucun")
+    monkeypatch.setenv("RENDU_FOURNISSEUR", "gemini")
+
+    def no_provider(settings):
+        raise AssertionError("aucun appel n'est nécessaire")
+    monkeypatch.setattr(cli, "make_provider", no_provider)
+    image = make_image(project.root / "rendu.png")
+    assert cli.main(["storyboard", str(project.root), "--image", str(image), "--sans-images"]) == 0
+    assert "aucune image ne sera générée" in capsys.readouterr().out
+    assert cli.main(["storyboard", str(project.root), "--image", str(image), "--sans-images", "--apply"]) == 0
+    assert len(list((project.output / "storyboard" / "rendu").glob("plan_*"))) == len(prompts.DEFAULT_SHOTS)

@@ -1,6 +1,13 @@
 # Rendus IA à partir d'Archicad
 
-Ce programme reproduit le workflow d'une vidéo TikTok (compte @dlhio.g, « Tout ce workflow IA m'a pris 35 minutes ») : à partir de simples **captures de la fenêtre 3D d'Archicad**, il produit des **rendus photoréalistes cohérents entre eux**, un **storyboard** de plans cinématiques, des images **upscalées** et de **courtes vidéos animées**.
+Ce programme reproduit le workflow de deux vidéos TikTok du même créateur (compte @dlhio.g) :
+
+- **la première** (« Tout ce workflow IA m'a pris 35 minutes ») : à partir de simples **captures de la fenêtre 3D d'Archicad**, des **rendus photoréalistes cohérents entre eux**, un **storyboard** de plans cinématiques, des images **agrandies** et de **courtes vidéos** ;
+- **la seconde** (une vidéo d'architecture vendue 3 677 € à une agence) : **animer de bonnes images**, existantes ou générées, avec des consignes vidéo qui ne décrivent que le mouvement de caméra et l'ambiance.
+
+Toutes les consignes envoyées aux modèles sont en français, comme celles qu'on voit à l'écran dans la seconde vidéo, où le créateur les donne à Seedance 2.0. Google indique que Veo (Flow) comprend le français mais réussit mieux en anglais, et aucune source ne garantit le français pour Kling : si un modèle suit mal une consigne, faites-la traduire en anglais par Gemini, ou utilisez `--modele seedance` avec fal.ai.
+
+**Pour tout faire gratuitement** avec l'abonnement Google AI Pro, voir la section « Tout faire gratuitement ».
 
 Deux fournisseurs au choix :
 
@@ -11,7 +18,7 @@ Avec les deux clés, les images passent par Gemini et les vidéos par fal.ai.
 
 Par défaut, chaque commande payante fonctionne en **simulation** : elle affiche ce qu'elle enverrait et combien de demandes seraient payées, sans rien envoyer. Il faut ajouter `--apply` pour lancer réellement.
 
-## Ce que montre la vidéo (rétro-ingénierie)
+## Première vidéo : des captures Archicad aux rendus (rétro-ingénierie)
 
 ### Les outils
 
@@ -54,6 +61,57 @@ Ce look est écrit dans [`rendu_ia/prompts.py`](rendu_ia/prompts.py), avec la co
 | Nœud *Assistant* + liste + générateurs | commande `storyboard` |
 | Nœud *Image Upscaler* | commande `upscale` |
 | Nœud *Video Generator* (Kling, Seedance) | commande `video` |
+
+## Seconde vidéo : animer de bonnes images (rétro-ingénierie)
+
+| Élément | Ce qu'on voit dans la vidéo |
+|---|---|
+| Projet | un immeuble de bureaux à brise-soleil en bois, extérieurs et intérieurs ; la vidéo a été vendue 3 677 € à l'agence d'architecture, « sans ouvrir aucun logiciel de rendu » |
+| Logiciel | le même logiciel à nœuds (Spaces, de Freepik, désormais sous la marque Magnific) : nœuds *Assistant*, *Image Generator*, *Video Generator*, *Variations*, *Image Upscaler* |
+| Images | Nano Banana Pro et Seedream 5 ; les images déjà faites par l'agence, réutilisées en 2K ; une maquette 3D grise d'intérieur transformée en photo |
+| Vidéo | Seedance 2.0 et Kling, en partant des images générées ou directement de la 3D ; un essai en basse définition (480p) avant la version finale |
+| Agrandissement | Magnific |
+| Format | vertical 9:16 pour les réseaux sociaux, en 2K |
+
+**La recette des consignes vidéo**, écrites en français par l'assistant (on lit à l'écran : « travelling avant, extrêmement lent, sur la façade aux panneaux perforés en acier… garde strictement la géométrie… une mouette se pose sur le bord supérieur d'un panneau et fait sa toilette en lissant ses plumes… aucun autre changement dans la scène ») :
+
+1. **Ne jamais redécrire l'architecture** : le modèle vidéo la voit déjà sur l'image.
+2. **Décrire le mouvement de caméra** avec des mots précis : vue FPV, vol traversant, travelling avant, très lent.
+3. **Donner l'intensité et l'ambiance** avec des adjectifs : du vent et du dynamisme, ou au contraire du calme, de la contemplation, du haut de gamme.
+4. **Choisir un type de scène** : scène d'entrée, scène de sortie, accéléré (timelapse), scène cinématique où un personnage se promène tranquillement.
+5. **Faire entrer un élément** (un personnage, une mouette) en donnant son image en référence.
+6. Terminer par « garde strictement la géométrie, aucun autre changement dans la scène ».
+
+**Sa règle d'or : « 90 % l'image, 10 % la vidéo ».** Une vidéo qui ne ressemble pas à de l'IA part toujours d'une très bonne image.
+
+| Dans la seconde vidéo | Ici |
+|---|---|
+| Réutiliser les images de l'agence | `storyboard PROJET --image <image existante>`, ou `video PROJET <images existantes>` |
+| Assistant qui écrit les consignes vidéo | commande `storyboard`, option `--ambiance calme` ou `dynamique` |
+| Seedance 2.0, Kling | commande `video` avec une clé fal.ai, ou fiche à suivre dans Flow (Veo), payée par les crédits de l'abonnement Google AI Pro |
+| Personnage ou mouette ajoutés à la scène | mode « Ingrédients vers vidéo » de Flow (expliqué dans la fiche) |
+| Essai en 480p avant la version finale | dans Flow, essai avec le modèle Veo le moins cher ; avec fal.ai et Seedance, `RENDU_OPTIONS_VIDEO={"resolution": "480p"}` |
+| Magnific | commande `upscale`, ou un logiciel gratuit d'agrandissement |
+
+## Tout faire gratuitement
+
+Avec l'abonnement Google AI Pro que vous avez déjà, sans rien payer de plus :
+
+| Étape | Comment, gratuitement |
+|---|---|
+| 1. Les images | **Le plus simple** : partir d'images déjà faites (rendus de l'agence, photos de chantier, rendus Twinmotion). Sinon, Nano Banana Pro **à la main** dans l'application Gemini (inclus dans l'abonnement), avec la capture Archicad et la consigne de `rendu_ia/prompts.py`. Ou le programme avec une clé gratuite et Nano Banana 2 Lite (à tester, voir « Avec une clé gratuite »). |
+| 2. Les consignes vidéo | `python -m rendu_ia storyboard PROJET --image <image> --ambiance calme --sans-images --apply`, avec une **clé gratuite** : Gemini 3.5 Flash est dans l'offre gratuite. Le programme écrit les plans et leurs consignes de mouvement en français, selon la recette ci-dessus ; avec `--sans-images`, chaque plan reprend l'image de départ avec un mouvement de caméra différent, sans aucune image générée. Sans aucune clé, le programme prend 4 plans types (entrée, vol traversant, détail, sortie). |
+| 3. Les vidéos | `python -m rendu_ia video PROJET <images>` : sans clé fal.ai, le programme n'envoie rien et écrit une **fiche à suivre dans Flow**, avec l'image et la consigne de chaque plan. L'abonnement donne 1 000 crédits Flow par mois ; un clip Veo 3.1 Lite en coûte 10, soit une centaine d'essais par mois. On refait ensuite les plans réussis avec un modèle Veo plus soigné, comme le créateur teste en 480p avant la version finale. |
+| 4. L'agrandissement | vidéos : agrandissement en 1080p dans Flow, gratuit avec l'abonnement ; images : un logiciel gratuit sur votre PC, par exemple Upscayl. |
+| 5. Le montage | Clipchamp, fourni avec Windows, ou CapCut. |
+
+Trois points à savoir avant de livrer à un client :
+
+- **Langue** : Flow comprend les consignes en français, mais Google indique que l'anglais donne de meilleurs résultats. Si un plan suit mal sa consigne, faites-la traduire en anglais par Gemini.
+- **Filigrane** : un filigrane invisible (SynthID) reste toujours dans les vidéos de Google ; le filigrane visible se désactive dans Flow depuis août 2026 (menu sous la photo de profil, réglage « Visible watermarking »).
+- **Usage commercial** : Google ne revendique pas la propriété des vidéos créées, et nous n'avons pas trouvé d'interdiction d'usage commercial pour Google AI Pro ; relisez les conditions de Flow, et dites au client que la vidéo est faite par IA.
+
+**Les autres versions gratuites ne conviennent pas à un client.** Magnific (le nouveau nom de Freepik), Dreamina (Seedance) et Kling ont des comptes gratuits, mais sans vidéo pour Magnific, et avec filigrane et usage personnel seulement pour Dreamina et Kling. Pour reproduire exactement l'outil de la vidéo, il faut l'abonnement Magnific Premium (environ 14,50 $ par mois en annuel, 20 $ en mensuel), qui inclut Spaces et une licence commerciale.
 
 ## Avant de commencer
 
@@ -223,7 +281,12 @@ Chaque capture est rendue avec l'image maître et les références : les vues on
 python -m rendu_ia storyboard PROJET --apply
 ```
 
-Le modèle de texte regarde l'image maître et écrit 4 plans cinématiques (plan large, plan moyen, détails, contrechamp), chacun avec son mouvement de caméra. Le storyboard est enregistré dans `sorties\storyboard\maitre\storyboard.json`, et les images des plans à côté (`plan_1.png`...). Options : `--plans 6`, `--image <autre rendu>` pour partir d'une autre image.
+Le modèle de texte regarde l'image maître et écrit 4 plans cinématiques (scène d'entrée, vol traversant, détails, scène de sortie), chacun avec sa consigne de mouvement en français, selon la recette de la seconde vidéo. Le storyboard est enregistré dans `sorties\storyboard\maitre\storyboard.json`, et les images des plans à côté (`plan_1.png`...). Options :
+
+- `--plans 6` : nombre de plans ;
+- `--image <image>` : partir d'une autre image, par exemple un rendu déjà fait par l'agence ;
+- `--ambiance calme` (contemplation, haut de gamme, par défaut) ou `--ambiance dynamique` (vent, énergie) ;
+- `--sans-images` : n'écrire que les consignes ; chaque plan reprend l'image de départ, qui sera animée avec un mouvement différent. Seul le modèle de texte est appelé, ce qui reste gratuit avec une clé gratuite.
 
 ### Étape 5 : upscale
 
@@ -248,7 +311,7 @@ La commande prend les plans du storyboard (la version upscalée si elle est à j
 
 **Avec une clé fal.ai** : les vidéos sont faites automatiquement (relancer avec `--apply`), en 5 secondes, dans `sorties\videos`. Options : `--modele seedance`, `--duree 8`.
 
-Dans les deux cas, `--mouvement "slow lateral slide from left to right"` (en anglais) impose un mouvement à tous les plans.
+Dans les deux cas, `--mouvement "glissement latéral très lent de gauche à droite"` impose un mouvement à tous les plans, et `--ambiance calme` ou `dynamique` remplace l'ambiance du storyboard. Les images peuvent aussi être des images existantes, données à la suite du projet : `python -m rendu_ia video PROJET "C:\Images agence\facade.jpg"`.
 
 Il reste à monter les clips (Clipchamp, fourni avec Windows, CapCut, Premiere...).
 
@@ -302,7 +365,7 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image n'a encore été produite avec une vraie clé. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 

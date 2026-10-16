@@ -13,6 +13,25 @@ from .gemini import GeminiProvider
 from .projet import Project
 from .service import FalProvider, Provider, ServiceError
 
+# Textes de l'aide et des erreurs de la ligne de commande : argparse les fournit en anglais.
+ARGPARSE_FR = {
+    "usage: ": "utilisation : ",
+    "positional arguments": "arguments",
+    "options": "options",
+    "subcommands": "commandes",
+    "show this help message and exit": "afficher cette aide et quitter",
+    " (default: %(default)s)": " (par défaut : %(default)s)",
+    "%(prog)s: error: %(message)s\n": "%(prog)s : erreur : %(message)s\n",
+    "argument %(argument_name)s: %(message)s": "%(argument_name)s : %(message)s",
+    "the following arguments are required: %s": "arguments obligatoires manquants : %s",
+    "unrecognized arguments: %s": "arguments inconnus : %s",
+    "invalid choice: %(value)r (choose from %(choices)s)": "choix impossible : %(value)r (possibles : %(choices)s)",
+    "invalid %(type)s value: %(value)r": "valeur invalide : %(value)r",
+    "expected one argument": "une valeur est attendue après cette option",
+    "ambiguous option: %(option)s could match %(matches)s": "option ambiguë : %(option)s peut désigner %(matches)s",
+}
+argparse._ = lambda text: ARGPARSE_FR.get(text, text)
+
 
 def bounded_int(low: int, high: int):
     def parse(value: str) -> int:
@@ -23,26 +42,36 @@ def bounded_int(low: int, high: int):
     return parse
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="rendu_ia", description="Rendus photo et vidéo à partir de captures Archicad.")
-    commands = parser.add_subparsers(dest="command", required=True)
+def with_help(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
+    parser.add_argument("-h", "--aide", action="help", help="afficher cette aide et quitter")
+    return parser
 
-    nouveau = commands.add_parser("nouveau", help="créer un dossier de projet (captures, références, ambiance)")
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = with_help(argparse.ArgumentParser(
+        prog="rendu_ia", add_help=False, description="Rendus photo et vidéo à partir de captures Archicad."))
+    commands = parser.add_subparsers(dest="command", required=True, metavar="commande")
+
+    def command(name: str, help: str) -> argparse.ArgumentParser:
+        return with_help(commands.add_parser(name, help=help, description=help, add_help=False))
+
+    nouveau = command("nouveau", "créer un dossier de projet (captures, références, ambiance)")
     nouveau.add_argument("projet", help="dossier du projet à créer")
 
     def paid(name: str, help: str) -> argparse.ArgumentParser:
-        command = commands.add_parser(name, help=help)
-        command.add_argument("projet", help="dossier du projet")
-        command.add_argument("--apply", action="store_true", help="lancer réellement (payant) ; sinon simulation")
-        command.add_argument("--refaire", action="store_true", help="refaire aussi ce qui existe déjà")
-        return command
+        sub = command(name, help)
+        sub.add_argument("projet", help="dossier du projet")
+        sub.add_argument("--apply", action="store_true",
+                         help="lancer réellement ; sans cette option, simple simulation qui n'envoie rien")
+        sub.add_argument("--refaire", action="store_true", help="refaire aussi ce qui existe déjà")
+        return sub
 
     essais = paid("essais", "plusieurs propositions d'une vue, pour valider la direction (simulation par défaut)")
     essais.add_argument("--capture", help="vue à essayer (nom du fichier dans « captures »)")
     essais.add_argument("--nombre", type=bounded_int(1, 4), default=4, help="nombre de propositions (4)")
     essais.add_argument("--personnages", action="store_true", help="ajouter une ou deux personnes")
 
-    maitre = commands.add_parser("maitre", help="verrouiller l'image maître qui donne le style aux autres")
+    maitre = command("maitre", "verrouiller l'image maître qui donne le style aux autres")
     maitre.add_argument("projet", help="dossier du projet")
     maitre.add_argument("image", help="image choisie (en général une des propositions des essais)")
 
@@ -54,6 +83,11 @@ def build_parser() -> argparse.ArgumentParser:
     storyboard = paid("storyboard", "plans cinématiques tirés d'une image (simulation par défaut)")
     storyboard.add_argument("--image", help="image de départ (par défaut l'image maître)")
     storyboard.add_argument("--plans", type=bounded_int(1, 8), default=4, help="nombre de plans (4)")
+    storyboard.add_argument("--ambiance", choices=sorted(prompts.AMBIANCES), default=prompts.DEFAULT_AMBIANCE,
+                            help="calme (contemplation, haut de gamme) ou dynamique (vent, énergie)")
+    storyboard.add_argument("--sans-images", action="store_true",
+                            help="écrire seulement les consignes : chaque plan reprend l'image de départ "
+                                 "(aucune image générée, gratuit avec une clé gratuite)")
 
     upscale = paid("upscale", "agrandir les images (simulation par défaut)")
     upscale.add_argument("fichiers", nargs="*", help="images à agrandir (par défaut rendus et storyboard)")
@@ -62,7 +96,10 @@ def build_parser() -> argparse.ArgumentParser:
     video.add_argument("fichiers", nargs="*", help="images à animer (par défaut les plans du storyboard)")
     video.add_argument("--duree", type=int, help="durée de chaque vidéo en secondes")
     video.add_argument("--modele", choices=sorted(VIDEO_MODELS), help="modèle vidéo (par défaut RENDU_MODELE_VIDEO)")
-    video.add_argument("--mouvement", help="mouvement de caméra, en anglais (remplace celui du storyboard)")
+    video.add_argument("--mouvement", help="mouvement de caméra, par exemple « vol traversant en vue FPV, "
+                       "extrêmement lent » (remplace celui du storyboard)")
+    video.add_argument("--ambiance", choices=sorted(prompts.AMBIANCES),
+                       help="calme ou dynamique (par défaut celle du storyboard, sinon calme)")
     return parser
 
 
@@ -202,6 +239,8 @@ def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
     elif not args.refaire and (folder / "storyboard.json").is_file():
         print("L'image de départ a changé depuis le storyboard : il sera réécrit et ses plans refaits.")
 
+    if args.sans_images:
+        return storyboard_without_images(settings, args, project, image, folder, shots, count)
     if shots is not None:
         code = run_jobs(settings, etapes.shot_jobs(image, folder, shots), args)
     elif not args.apply:
@@ -214,8 +253,8 @@ def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
         provider = make_provider(settings)
         try:
             print("Écriture du storyboard...", flush=True)
-            shots = etapes.write_storyboard(provider, settings, image, count)
-            etapes.save_storyboard(folder, image, shots)
+            shots = etapes.write_storyboard(provider, settings, image, count, args.ambiance)
+            etapes.save_storyboard(folder, image, shots, args.ambiance)
             for index, shot in enumerate(shots, start=1):
                 print(f"  plan {index} : {shot.title}\n      image : {shot.image}\n      mouvement : {shot.motion}")
             code = run_jobs(settings, etapes.shot_jobs(image, folder, shots), args, provider)
@@ -224,6 +263,40 @@ def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
     if args.apply and code == 0:
         print(f"Plans dans {folder}. Ensuite : python -m rendu_ia upscale \"{project.root}\"")
     return code
+
+
+def storyboard_without_images(settings: Settings, args: argparse.Namespace, project: Project, image: Path,
+                               folder: Path, shots: list[prompts.Shot] | None, count: int) -> int:
+    """Consignes seulement : les plans reprennent l'image de départ, seul le modèle de texte est appelé.
+    Sans clé API, les plans types suffisent : ce parcours ne demande alors aucun compte."""
+    use_model = settings.text_model is not None and settings.has_key
+    if not use_model:
+        count = min(count, len(prompts.DEFAULT_SHOTS))
+    if not args.apply:
+        if shots is None:
+            writer = settings.text_model if use_model else "plans types, sans modèle de texte"
+            print(f"[à faire] écrire le storyboard de {count} plans ({writer})")
+        print("Les plans reprendront l'image de départ : aucune image ne sera générée.")
+        if shots is None and use_model:
+            print("Simulation : 1 demande serait envoyée au modèle de texte. Ajoutez --apply pour lancer.")
+        return 0
+    if shots is None:
+        if settings.text_model and not use_model:
+            print("Pas de clé API : plans types, sans modèle de texte.")
+        provider = make_provider(settings) if use_model else None
+        try:
+            print("Écriture du storyboard...", flush=True)
+            shots = etapes.write_storyboard(provider, settings, image, count, args.ambiance, same_image=True)
+        finally:
+            if provider:
+                provider.close()
+        etapes.save_storyboard(folder, image, shots, args.ambiance)
+        for index, shot in enumerate(shots, start=1):
+            print(f"  plan {index} : {shot.title}\n      mouvement : {shot.motion}")
+    etapes.copy_plans(image, folder, len(shots))
+    print(f"Plans prêts dans {folder} (copies de l'image de départ).\n"
+          f"Ensuite : python -m rendu_ia video \"{project.root}\"")
+    return 0
 
 
 def cmd_upscale(settings: Settings, args: argparse.Namespace) -> int:
@@ -253,12 +326,17 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
     sources = existing_files(args.fichiers) if args.fichiers else etapes.default_video_sources(project)
     if not sources:
         raise ConfigError("Aucune image à animer : lancez d'abord « storyboard » ou « rendus ».")
+    jobs = etapes.video_jobs(project, settings, sources, args.mouvement, args.ambiance)
     if not settings.fal_key:
-        sheet = etapes.write_flow_sheet(project, sources, args.mouvement)
-        print(f"Pas de clé fal.ai : les vidéos se font dans Flow, inclus dans l'abonnement Google AI Pro.\n"
-              f"Fiche à suivre, avec l'image et le texte de chacun des {len(sources)} plan(s) : {sheet}")
+        todo = etapes.pending(jobs, args.refaire)
+        if not todo:
+            print(f"Toutes les vidéos sont déjà dans {project.output / 'videos'} (--refaire pour refaire la fiche).")
+            return 0
+        sheet = etapes.write_flow_sheet(project, [job.sources[0] for job in todo], args.mouvement, args.ambiance)
+        print(f"Pas de clé fal.ai : les vidéos se font dans Flow, payées par les crédits de l'abonnement "
+              f"Google AI Pro.\nFiche à suivre, avec l'image et le texte de chacun des {len(todo)} plan(s) : {sheet}")
         return 0
-    code = run_jobs(settings, etapes.video_jobs(project, settings, sources, args.mouvement), args, video=True)
+    code = run_jobs(settings, jobs, args, video=True)
     if args.apply and code == 0:
         print(f"Vidéos dans {project.output / 'videos'} : il reste à les monter (Clipchamp, CapCut, Premiere...).")
     return code
