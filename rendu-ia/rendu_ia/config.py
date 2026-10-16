@@ -57,7 +57,7 @@ class Settings:
     provider: str = "fal"
     gemini_key: str = ""
     gemini_image_model: str = "gemini-3-pro-image"          # Nano Banana Pro
-    gemini_text_model: str | None = "gemini-3.5-flash"      # None : plans types
+    gemini_text_model: str | None = "gemini-3.5-flash-lite"  # None : plans types
     fal_key: str = ""
     image_model: str = "fal-ai/nano-banana-pro/edit"
     resolution: str = "2K"
@@ -131,7 +131,7 @@ class Settings:
             raise ConfigError("RENDU_PARALLELE doit être entre 1 et 8.")
         check_video_seconds(video, video_name, video_seconds)
         llm_model = _env("RENDU_MODELE_LLM", "anthropic/claude-sonnet-5.5")
-        gemini_text_model = _env("RENDU_GEMINI_MODELE_TEXTE", "gemini-3.5-flash")
+        gemini_text_model = _env("RENDU_GEMINI_MODELE_TEXTE", "gemini-3.5-flash-lite")
         return cls(
             provider=provider,
             gemini_key=gemini_key,

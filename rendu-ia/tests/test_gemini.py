@@ -70,7 +70,7 @@ def test_provider_is_gemini_when_a_google_key_is_set(monkeypatch):
     assert Settings.from_env().provider == "fal"
     monkeypatch.setenv("GOOGLE_API_KEY", "cle")
     settings = Settings.from_env()
-    assert (settings.provider, settings.gemini_key, settings.text_model) == ("gemini", "cle", "gemini-3.5-flash")
+    assert (settings.provider, settings.gemini_key, settings.text_model) == ("gemini", "cle", "gemini-3.5-flash-lite")
     assert settings.gemini_image_model == "gemini-3-pro-image"
     monkeypatch.setenv("RENDU_FOURNISSEUR", "fal")
     assert Settings.from_env().provider == "fal"
@@ -174,10 +174,14 @@ def test_storyboard_text_request(settings, project):
     google = FakeGoogle(answer)
     text = google.provider(settings).write_text(project.captures()[0], "SYSTEM", "REQUEST")
     assert text == STORYBOARD
-    assert google.requests[0].url.path == "/v1beta/models/gemini-3.5-flash:generateContent"
+    assert google.requests[0].url.path == "/v1beta/models/gemini-3.5-flash-lite:generateContent"
     body = google.bodies()[0]
     assert body["systemInstruction"] == {"parts": [{"text": "SYSTEM"}]}
-    assert body["generationConfig"] == {"responseMimeType": "application/json"}
+    config = body["generationConfig"]
+    assert config["responseMimeType"] == "application/json"
+    assert config["thinkingConfig"] == {"thinkingLevel": "low"}
+    assert config["mediaResolution"] == "MEDIA_RESOLUTION_MEDIUM"
+    assert "responseSchema" not in config
     assert body["contents"][0]["parts"][0] == {"text": "REQUEST"}
 
 
@@ -213,7 +217,7 @@ def test_whole_workflow_with_gemini_and_flow(settings, project, monkeypatch, cap
     assert run("rendus", project.root, "--apply") == 0
     rendu = google.bodies()[-1]["contents"][0]["parts"]
     assert len(rendu) == 4   # consigne, capture de la cuisine, image maître, référence
-    assert "L'image 2 est l'image maître validée" in rendu[0]["text"]
+    assert "Image 2 : image maître validée" in rendu[0]["text"]
     assert run("storyboard", project.root, "--plans", "2", "--apply") == 0
     assert run("upscale", project.root, "--apply") == 0
     assert (project.output / "upscale" / "storyboard" / "maitre" / "plan_2.png").is_file()
@@ -295,8 +299,8 @@ def test_free_path_existing_image_to_flow_sheet(settings, project, monkeypatch, 
     assert cli.main(["storyboard", str(project.root), "--image", str(facade), "--plans", "2",
                      "--sans-images", "--apply"]) == 0
     assert len(google.requests) == 1
-    assert google.requests[0].url.path == "/v1beta/models/gemini-3.5-flash:generateContent"
-    assert "Tous les plans partent exactement de cette image" in google.bodies()[0]["contents"][0]["parts"][0]["text"]
+    assert google.requests[0].url.path == "/v1beta/models/gemini-3.5-flash-lite:generateContent"
+    assert "Tous les plans partent de cette image" in google.bodies()[0]["contents"][0]["parts"][0]["text"]
     folder = project.output / "storyboard" / "facade"
     assert [path.read_bytes() == facade.read_bytes() for path in sorted(folder.glob("plan_*"))] == [True, True]
 
@@ -322,3 +326,29 @@ def test_without_images_needs_no_key_with_default_shots(project, monkeypatch, ca
     assert "aucune image ne sera générée" in capsys.readouterr().out
     assert cli.main(["storyboard", str(project.root), "--image", str(image), "--sans-images", "--apply"]) == 0
     assert len(list((project.output / "storyboard" / "rendu").glob("plan_*"))) == len(prompts.DEFAULT_SHOTS)
+
+
+def test_storyboard_request_carries_the_answer_format(settings, project, monkeypatch):
+    google = FakeGoogle()
+    monkeypatch.setattr(cli, "make_provider", google.provider)
+    image = make_image(project.root / "rendu.png")
+    assert cli.main(["storyboard", str(project.root), "--image", str(image), "--sans-images", "--apply"]) == 0
+    schema = google.bodies()[0]["generationConfig"]["responseSchema"]
+    assert schema["properties"]["plans"]["items"]["required"] == ["titre", "mouvement"]
+
+
+def test_refused_economy_settings_fall_back_to_a_plain_request(settings, project):
+    refused = error_answer(400, "INVALID_ARGUMENT", "Unknown name \"mediaResolution\"")
+    google = FakeGoogle(refused)
+    text = google.provider(settings).write_text(project.captures()[0], "SYSTEM", "REQUEST", {"type": "OBJECT"})
+    assert text == STORYBOARD
+    first, second = google.bodies()
+    assert "thinkingConfig" in first["generationConfig"]
+    assert second["generationConfig"] == {"responseMimeType": "application/json"}
+
+
+def test_refusals_other_than_bad_settings_are_not_retried(settings, project):
+    google = FakeGoogle(error_answer(422, "INVALID_ARGUMENT", "contenu refusé"))
+    with pytest.raises(ServiceError, match="contenu refusé"):
+        google.provider(settings).write_text(project.captures()[0], "SYSTEM", "REQUEST")
+    assert len(google.requests) == 1

@@ -21,10 +21,23 @@ from .projet import write_atomic
 from .service import CONTENT_TYPES, INPUT_MAX_SIDE, ServiceError, prepare_image
 
 API_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-REFERENCE_MAX_SIDE = 1280   # image maître et références : elles ne donnent que le style
+REFERENCE_MAX_SIDE = 1024   # image maître et références : elles ne donnent que le style
+TEXT_IMAGE_MAX_SIDE = 1024  # image regardée par le modèle de texte : seule la composition compte
+# Réglages d'économie de l'appel au modèle de texte : réflexion réduite, image en définition moyenne
+# (560 tokens au lieu de 1 120), réponse au format imposé et plafonnée.
+TEXT_ECONOMY = {"thinkingConfig": {"thinkingLevel": "low"}, "mediaResolution": "MEDIA_RESOLUTION_MEDIUM",
+                "maxOutputTokens": 4096}
 RETRY_DELAYS = (5, 15, 30, 60)   # secondes d'attente avant chaque nouvelle tentative
 RETRY_STATUSES = (429, 500, 502, 503, 504)   # saturation ou panne passagère
 MIME_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}
+
+
+class RequestRefused(ServiceError):
+    """Demande refusée par Google (paramètre non accepté, contenu bloqué...)."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GeminiProvider:
@@ -55,13 +68,22 @@ class GeminiProvider:
             ratio = closest_ratio(inputs[0])
         return [self._render(parts, ratio, self.settings.resolution, target) for target in targets]
 
-    def write_text(self, image: Path, system: str, prompt: str) -> str:
+    def write_text(self, image: Path, system: str, prompt: str, schema: dict | None = None) -> str:
         body = {
             "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt}, self._image_part(image, INPUT_MAX_SIDE)]}],
-            "generationConfig": {"responseMimeType": "application/json"},
+            "contents": [{"role": "user", "parts": [{"text": prompt}, self._image_part(image, TEXT_IMAGE_MAX_SIDE)]}],
         }
-        parts = _parts(self._post(self.settings.gemini_text_model, body))
+        plain = {"responseMimeType": "application/json"}
+        economy = {**plain, **TEXT_ECONOMY, **({"responseSchema": schema} if schema else {})}
+        model = self.settings.gemini_text_model
+        try:
+            result = self._post(model, {**body, "generationConfig": economy})
+        except RequestRefused as exc:
+            if exc.status_code != 400:
+                raise
+            # Un réglage d'économie n'est pas accepté par ce modèle : une seule demande simple, sans eux.
+            result = self._post(model, {**body, "generationConfig": plain})
+        parts = _parts(result)
         return "".join(part.get("text", "") for part in parts if not part.get("thought"))
 
     def upscale(self, source: Path, target: Path) -> Path:
@@ -105,8 +127,8 @@ class GeminiProvider:
             if response.status_code in RETRY_STATUSES and not last:
                 self._sleep(retry_delay(error, RETRY_DELAYS[attempt]))
                 continue
-            raise ServiceError(f"refusé par Gemini ({response.status_code} {error.get('status', '')}) : "
-                               f"{error.get('message', response.text[:300])}")
+            raise RequestRefused(f"refusé par Gemini ({response.status_code} {error.get('status', '')}) : "
+                                 f"{error.get('message', response.text[:300])}", response.status_code)
         raise AssertionError("inatteignable")
 
 

@@ -68,7 +68,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     essais = paid("essais", "plusieurs propositions d'une vue, pour valider la direction (simulation par défaut)")
     essais.add_argument("--capture", help="vue à essayer (nom du fichier dans « captures »)")
-    essais.add_argument("--nombre", type=bounded_int(1, 4), default=4, help="nombre de propositions (4)")
+    essais.add_argument("--nombre", type=bounded_int(1, 4), default=2, help="nombre de propositions (2)")
     essais.add_argument("--personnages", action="store_true", help="ajouter une ou deux personnes")
 
     maitre = command("maitre", "verrouiller l'image maître qui donne le style aux autres")
@@ -100,6 +100,12 @@ def build_parser() -> argparse.ArgumentParser:
                        "extrêmement lent » (remplace celui du storyboard)")
     video.add_argument("--ambiance", choices=sorted(prompts.AMBIANCES),
                        help="calme ou dynamique (par défaut celle du storyboard, sinon calme)")
+    video.add_argument("--essai", action="store_true",
+                       help="essai à moindre coût avant la version finale : durée minimale, 480p avec Seedance, "
+                            "rangé dans « videos/essais »")
+
+    etat = command("etat", "faire le point sur le projet et donner la prochaine commande (aucun appel)")
+    etat.add_argument("projet", help="dossier du projet")
     return parser
 
 
@@ -322,12 +328,22 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
         settings = dataclasses.replace(settings, video_name=args.modele, video=VIDEO_MODELS[args.modele])
     if args.duree is not None:
         settings = dataclasses.replace(settings, video_seconds=args.duree)
+    folder = "videos"
+    if args.essai:
+        # Comme le créateur de la seconde vidéo : on teste le mouvement au plus bas prix, puis on refait en HD.
+        low = {"resolution": "480p"} if settings.video_name == "seedance" else {}
+        settings = dataclasses.replace(settings, video_seconds=settings.video.min_seconds,
+                                       video_options={**low, **settings.video_options})
+        folder = "videos/essais"
     check_video_seconds(settings.video, settings.video_name, settings.video_seconds)
     sources = existing_files(args.fichiers) if args.fichiers else etapes.default_video_sources(project)
     if not sources:
         raise ConfigError("Aucune image à animer : lancez d'abord « storyboard » ou « rendus ».")
-    jobs = etapes.video_jobs(project, settings, sources, args.mouvement, args.ambiance)
+    jobs = etapes.video_jobs(project, settings, sources, args.mouvement, args.ambiance, folder)
     if not settings.fal_key:
+        if args.essai:
+            print("Dans Flow, l'essai se fait avec Veo 3.1 Lite, le modèle le moins cher (voir la fiche).")
+        jobs = etapes.video_jobs(project, settings, sources, args.mouvement, args.ambiance)
         todo = etapes.pending(jobs, args.refaire)
         if not todo:
             print(f"Toutes les vidéos sont déjà dans {project.output / 'videos'} (--refaire pour refaire la fiche).")
@@ -342,6 +358,49 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
     return code
 
 
+def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
+    """Le point sur le projet, sans aucun appel : ce qui est fait, ce qui manque, la prochaine commande."""
+    project = Project.open(args.projet)
+    out = project.output
+    root = f"\"{project.root}\""
+    captures = project.captures()
+    master = project.master()
+    rendus = etapes.rendus_jobs(project, captures, 1, False, settings.image_limits[0])
+    rendus_todo = etapes.pending(rendus, False)
+    storyboards = sorted(path.parent for path in (out / "storyboard").glob("*/storyboard.json"))
+    videos = etapes.video_jobs(project, settings, etapes.default_video_sources(project), None)
+    videos_todo = etapes.pending(videos, False)
+    essais = [path for path in (out / "essais").glob("*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
+    upscaled = [path for path in (out / "upscale").rglob("*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
+
+    key = "oui" if settings.has_key else "non (parcours gratuit sans clé possible)"
+    print(f"Projet : {project.root}\nFournisseur : {provider_label(settings)}, clé : {key}")
+    print(f"Captures : {len(captures)} ; références : {len(project.references())} ; essais : {len(essais)}")
+    print(f"Image maître : {master.relative_to(project.root) if master else 'aucune'}")
+    print(f"Rendus à jour : {len(rendus) - len(rendus_todo)}/{len(rendus)}"
+          + (f" (à faire : {', '.join(job.label.removeprefix('rendu ') for job in rendus_todo)})" if rendus_todo else ""))
+    for folder in storyboards:
+        plans = [path for path in folder.glob("plan_*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
+        print(f"Storyboard « {folder.name} » : {len(plans)} plan(s)")
+    print(f"Images agrandies : {len(upscaled)} ; vidéos à jour : {len(videos) - len(videos_todo)}/{len(videos)}")
+
+    if not captures and not storyboards:
+        step = (f"déposez vos captures Archicad dans « captures », ou partez d'une image existante : "
+                f"python -m rendu_ia storyboard {root} --image <image> --sans-images --apply")
+    elif captures and master is None:
+        step = f"python -m rendu_ia essais {root} --capture {captures[0].stem}"
+    elif rendus_todo:
+        step = f"python -m rendu_ia rendus {root}"
+    elif not storyboards:
+        step = f"python -m rendu_ia storyboard {root}"
+    elif videos_todo:
+        step = f"python -m rendu_ia video {root}"
+    else:
+        step = "tout est à jour : il reste le montage (Clipchamp, CapCut...)."
+    print(f"Prochaine étape : {step}")
+    return 0
+
+
 def warn_references(project: Project, settings: Settings, master: bool) -> None:
     references = project.references()
     room = etapes.reference_room(settings.image_limits[0], master)
@@ -353,7 +412,7 @@ def warn_references(project: Project, settings: Settings, master: bool) -> None:
 
 
 COMMANDS = {"nouveau": cmd_nouveau, "essais": cmd_essais, "maitre": cmd_maitre, "rendus": cmd_rendus,
-            "storyboard": cmd_storyboard, "upscale": cmd_upscale, "video": cmd_video}
+            "storyboard": cmd_storyboard, "upscale": cmd_upscale, "video": cmd_video, "etat": cmd_etat}
 
 
 def main(argv: list[str] | None = None) -> int:

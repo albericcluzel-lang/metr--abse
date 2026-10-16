@@ -57,17 +57,17 @@ def test_seedance_needs_at_least_four_seconds(monkeypatch):
 
 def test_render_prompt_numbers_images_in_the_order_they_are_sent():
     text = prompts.render_prompt(master=True, references=["sol parquet", "tissu canape"], brief=None, people=False)
-    assert "L'image 1 est une capture de la maquette 3D" in text
-    assert "L'image 2 est l'image maître validée" in text
+    assert "Image 1 : capture de la maquette 3D" in text
+    assert "Image 2 : image maître validée" in text
     assert "image 3 : sol parquet ; image 4 : tissu canape" in text
-    assert "Personnages :" not in text and "Consignes de l'architecte" not in text
+    assert "Ajoute une ou deux personnes" not in text and "Consignes de l'architecte" not in text
 
 
 def test_render_prompt_without_master_starts_references_at_image_2():
     text = prompts.render_prompt(master=False, references=["sol"], brief="Esprit années 60.", people=True)
     assert "master" not in text
     assert "image 2 : sol" in text
-    assert "Personnages :" in text
+    assert "Ajoute une ou deux personnes" in text
     assert text.index("Esprit années 60.") > text.index(prompts.LIGHT)  # le brief passe après les défauts
 
 
@@ -94,13 +94,13 @@ def test_parse_storyboard_rejects_unusable_answers(text):
 def test_video_prompt_uses_default_motion():
     assert prompts.DEFAULT_MOTION in prompts.video_prompt(None)
     assert "panoramique lent" in prompts.video_prompt("panoramique lent")
-    assert prompts.AMBIANCES["dynamique"] in prompts.video_prompt(None, "dynamique")
+    assert prompts.VIDEO_STYLES["dynamique"] in prompts.video_prompt(None, "dynamique")
 
 
 def test_storyboard_request_asks_for_french_camera_moves_only():
     text = prompts.storyboard_request(3, "dynamique")
     assert "3 plans" in text and prompts.AMBIANCES["dynamique"] in text
-    assert "NE REDÉCRIS PAS l'architecture" in text and "vue FPV" in text
+    assert "ne redécris pas l'architecture" in text and "vue FPV" in text
     assert '"plans"' in text and '"mouvement"' in text
 
 

@@ -39,7 +39,7 @@ def test_simulation_sends_nothing(project, monkeypatch, capsys):
     assert run("essais", project.root, "--capture", "salon") == 0
     assert run("rendus", project.root) == 0
     out = capsys.readouterr().out
-    assert "[à faire] essais salon.png (4 image(s))" in out
+    assert "[à faire] essais salon.png (2 image(s))" in out
     assert "[à faire] rendu cuisine.jpg" in out and "Ajoutez --apply" in out
     assert not project.output.exists()
 
@@ -69,7 +69,7 @@ def test_essais_then_master_then_rendus(project, fake):
     endpoint, arguments = fake.calls[0]
     assert arguments["image_urls"] == ["https://cdn.test/cuisine.jpg", "https://cdn.test/maitre.png",
                                        "https://cdn.test/sol - parquet chene point de hongrie.jpg"]
-    assert "L'image 2 est l'image maître validée" in arguments["prompt"]
+    assert "Image 2 : image maître validée" in arguments["prompt"]
     assert (project.output / "rendus" / "cuisine.png").is_file()
 
     fake.calls.clear()
@@ -266,10 +266,10 @@ def test_storyboard_ambiance_is_kept_for_the_videos(project, fake):
     assert saved["ambiance"] == "dynamique"
     fake.calls.clear()
     assert run("video", project.root, "--apply") == 0
-    assert all(prompts.AMBIANCES["dynamique"] in arguments["prompt"] for _, arguments in fake.calls)
+    assert all(prompts.VIDEO_STYLES["dynamique"] in arguments["prompt"] for _, arguments in fake.calls)
     fake.calls.clear()
     assert run("video", project.root, "--ambiance", "calme", "--refaire", "--apply") == 0
-    assert all(prompts.AMBIANCES["calme"] in arguments["prompt"] for _, arguments in fake.calls)
+    assert all(prompts.VIDEO_STYLES["calme"] in arguments["prompt"] for _, arguments in fake.calls)
 
 
 def test_flow_sheet_lists_only_missing_videos(project, capsys):
@@ -307,3 +307,42 @@ def test_without_images_and_without_any_key_uses_default_shots(project, monkeypa
     assert len(list((project.output / "storyboard" / "rendu").glob("plan_*"))) == len(prompts.DEFAULT_SHOTS)
     assert run("video", project.root) == 0
     assert (project.output / "videos" / "a_faire_dans_flow.txt").is_file()
+
+
+def test_identical_images_are_upscaled_once(project, fake):
+    image = make_image(project.root / "rendu.png")
+    assert run("storyboard", project.root, "--image", image, "--sans-images", "--apply") == 0
+    fake.calls.clear()
+    assert run("upscale", project.root, "--apply") == 0
+    assert len(fake.calls) == 1   # deux plans identiques : une seule demande
+    folder = project.output / "upscale" / "storyboard" / "rendu"
+    assert sorted(path.name for path in folder.iterdir()) == ["plan_1.png", "plan_2.png"]
+    fake.calls.clear()
+    assert run("upscale", project.root, "--apply") == 0
+    assert fake.calls == []
+
+
+def test_video_test_run_is_cheap_and_kept_apart(project, fake):
+    make_image(project.output / "rendus" / "salon.png")
+    assert run("video", project.root, "--modele", "seedance", "--essai", "--apply") == 0
+    arguments = fake.calls[-1][1]
+    assert (arguments["duration"], arguments["resolution"]) == ("4", "480p")
+    assert (project.output / "videos" / "essais" / "rendus" / "salon.mp4").is_file()
+    assert run("video", project.root, "--essai", "--refaire", "--apply") == 0   # Kling : pas de 480p, durée minimale
+    assert fake.calls[-1][1]["duration"] == "3"
+    fake.calls.clear()
+    assert run("video", project.root, "--modele", "seedance", "--apply") == 0   # la version finale reste à faire
+    assert fake.calls[-1][1]["resolution"] == "720p"
+
+
+def test_etat_gives_the_next_step_without_any_call(project, monkeypatch, capsys):
+    def no_provider(settings):
+        raise AssertionError("etat n'envoie rien")
+    monkeypatch.setattr(cli, "make_provider", no_provider)
+    assert run("etat", project.root) == 0
+    out = capsys.readouterr().out
+    assert "Captures : 2" in out and "Image maître : aucune" in out and "rendu_ia essais" in out
+    etapes.lock_master(project, make_image(project.root / "choix.png"))
+    assert run("etat", project.root) == 0
+    out = capsys.readouterr().out
+    assert "Rendus à jour : 0/2" in out and "Prochaine étape : python -m rendu_ia rendus" in out

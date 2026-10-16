@@ -7,6 +7,7 @@ images de départ (capture réexportée, nouvelle image maître, rendu refait) e
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import threading
@@ -161,8 +162,8 @@ def write_storyboard(provider: Provider | None, settings: Settings, image: Path,
     """Le modèle de texte regarde l'image et écrit les plans (le nœud « Assistant » des vidéos)."""
     if settings.text_model is None or provider is None:
         return list(prompts.DEFAULT_SHOTS[:count])
-    text = provider.write_text(image, prompts.STORYBOARD_SYSTEM,
-                               prompts.storyboard_request(count, ambiance, same_image))
+    text = provider.write_text(image, prompts.STORYBOARD_SYSTEM, prompts.storyboard_request(count, ambiance, same_image),
+                               prompts.storyboard_schema(same_image))
     try:
         return prompts.parse_storyboard(text, count)
     except ValueError as exc:  # JSONDecodeError en hérite
@@ -239,12 +240,24 @@ def default_upscale_sources(project: Project) -> list[Path]:
 
 
 def upscale_jobs(project: Project, sources: list[Path]) -> list[Job]:
-    jobs = []
+    """Une demande par image différente : les images identiques (plans qui reprennent l'image de départ)
+    ne sont agrandies qu'une fois, le résultat est recopié pour les autres."""
+    groups: dict[str, list[Path]] = {}
     for source in sources:
-        target = project.output / "upscale" / output_key(project, source)
-        jobs.append(Job(f"upscale {output_key(project, source).as_posix()}", [target], IMAGE_SUFFIXES,
-                        lambda provider, source=source, target=target: [provider.upscale(source, target)],
-                        [source]))
+        groups.setdefault(hashlib.sha256(source.read_bytes()).hexdigest(), []).append(source)
+    jobs = []
+    for same in groups.values():
+        targets = [project.output / "upscale" / output_key(project, source) for source in same]
+
+        def run(provider: Provider, source=same[0], targets=targets) -> list[Path]:
+            first = provider.upscale(source, targets[0])
+            copies = [replace_output(target, first.suffix, first.read_bytes()) for target in targets[1:]]
+            return [first, *copies]
+
+        label = f"upscale {output_key(project, same[0]).as_posix()}"
+        if len(same) > 1:
+            label += f" (et {len(same) - 1} copie(s) identique(s))"
+        jobs.append(Job(label, targets, IMAGE_SUFFIXES, run, list(same)))
     return jobs
 
 
@@ -286,11 +299,11 @@ def clip_prompt(project: Project, source: Path, motion: str | None, ambiance: st
 
 
 def video_jobs(project: Project, settings: Settings, sources: list[Path], motion: str | None,
-               ambiance: str | None = None) -> list[Job]:
-    """Vidéos par fal.ai (Kling ou Seedance)."""
+               ambiance: str | None = None, folder: str = "videos") -> list[Job]:
+    """Vidéos par fal.ai (Kling ou Seedance), rangées dans `sorties/<folder>`."""
     jobs = []
     for source in sources:
-        target = project.output / "videos" / output_key(project, source)
+        target = project.output / folder / output_key(project, source)
         prompt = clip_prompt(project, source, motion, ambiance)
         jobs.append(Job(f"vidéo {output_key(project, source).as_posix()} ({settings.video_seconds} s)",
                         [target], VIDEO_SUFFIXES,

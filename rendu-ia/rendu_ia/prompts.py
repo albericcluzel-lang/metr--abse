@@ -16,53 +16,41 @@ from dataclasses import dataclass
 
 # --- Rendu photo à partir d'une capture 3D Archicad --------------------------------------------
 
+# Consignes condensées : chaque mot est payé à chaque demande (et compte dans les quotas gratuits).
+
 GEOMETRY_LOCK = (
-    "L'image 1 est une capture de la maquette 3D du projet (Archicad). Elle fait foi pour tout ce qui est "
-    "construit. Garde exactement la même position de caméra, le même angle de vue, la même focale et le "
-    "même cadrage ; la même géométrie des pièces, des murs, des hauteurs sous plafond, des poutres, des "
-    "poteaux, des baies, des fenêtres et des portes ; et le même mobilier, les mêmes luminaires, objets et "
-    "tableaux, aux mêmes endroits, avec les mêmes formes, tailles et couleurs. N'ajoute, ne retire, ne "
-    "déplace et ne redimensionne aucun élément d'architecture ni aucun meuble. Ignore l'aspect du logiciel "
-    "3D : surfaces grises unies, textures manquantes, arêtes trop nettes, contours noirs, plantes ou "
-    "personnages en découpe 2D, éléments d'interface."
+    "Image 1 : capture de la maquette 3D Archicad, qui fait foi. Garde exactement le cadrage, la position de "
+    "caméra et la focale, la géométrie (murs, plafonds, poutres, poteaux, baies, portes) et chaque meuble, "
+    "luminaire, objet et tableau, à la même place, de même forme, taille et couleur. N'ajoute, ne retire et ne "
+    "déplace rien. Ignore l'aspect du logiciel 3D : aplats gris, textures absentes, contours noirs, plantes et "
+    "personnages en découpe 2D."
 )
 
 MATERIALS = (
-    "Matériaux : transforme chaque surface en un vrai matériau, avec ses imperfections naturelles. Quand la "
-    "maquette montre un matériau ou une couleur, garde-le et rends-le réel (une texture bois devient un vrai "
-    "bois du même ton et du même dessin, un meuble coloré garde sa couleur). Quand une surface est grise ou "
-    "sans texture, utilise : parquet en chêne naturel au veinage visible et à la finition satinée, murs "
-    "peints grège chaud mat, plafond blanc mat. Vrais tissus (bouclette, laine, lin, cuir) avec plis et "
-    "texture, métal laqué ou brossé, vrai verre avec reflets, vraies plantes aux feuilles naturelles. "
-    "Décoration : lieu habité mais rangé (livres, vinyles, céramiques, plantes), sans encombrement."
+    "Matériaux : rends chaque surface réelle, avec ses imperfections. Garde les matériaux et couleurs de la "
+    "maquette (une texture bois devient le même bois). Surfaces grises ou sans texture : parquet chêne naturel "
+    "satiné, murs grège mats, plafond blanc mat. Vrais tissus (bouclette, lin, cuir), métal, verre avec reflets, "
+    "vraies plantes. Lieu habité mais rangé."
 )
 
 LIGHT = (
-    "Lumière : fin d'après-midi, soleil bas. La lumière chaude du soleil entre par les fenêtres et, là où il "
-    "y a des stores, passe à travers en dessinant des rayures nettes sur le sol, le tapis et le mobilier. "
-    "Une lumière chaude et douce, renvoyée par les surfaces, remplit la pièce. Les spots encastrés et les "
-    "rails sont allumés, avec une lueur chaude de 2700 K et de légers halos sur les murs. Exposition "
-    "équilibrée : les fenêtres sont lumineuses sans être brûlées."
+    "Lumière : fin d'après-midi, soleil bas et chaud ; à travers les stores, rayures nettes sur le sol et le "
+    "mobilier ; lumière renvoyée douce ; spots et rails allumés en 2700 K, avec halos sur les murs ; fenêtres "
+    "lumineuses sans être brûlées."
 )
 
 PHOTO_STYLE = (
-    "Photographie : photo d'architecture intérieure haut de gamme, comme publiée dans un magazine "
-    "d'architecture. Appareil moyen format Fujifilm, couleurs naturelles Fujifilm proches de Classic "
-    "Chrome : tons chauds, légèrement désaturés, naturels, hautes lumières douces, ombres profondes mais "
-    "lisibles, grain très fin façon pellicule. Verticales parfaitement droites. Textures nettes et réalistes : "
-    "aucun aspect image de synthèse, pas de sursaturation, pas de halos HDR."
+    "Photo : magazine d'architecture, moyen format Fujifilm, couleurs Classic Chrome chaudes et légèrement "
+    "désaturées, hautes lumières douces, grain très fin, verticales droites, textures nettes, aucun aspect image "
+    "de synthèse ni HDR."
 )
 
 PEOPLE = (
-    "Personnages : ajoute une ou deux personnes en vêtements simples aux tons neutres, occupées "
-    "naturellement (lire, marcher, regarder par la fenêtre), prises sur le vif sans regarder l'objectif. "
-    "Elles ne doivent pas cacher les éléments d'architecture importants."
+    "Ajoute une ou deux personnes en tenue neutre, prises sur le vif, sans regarder l'objectif ni cacher "
+    "l'architecture."
 )
 
-SINGLE_IMAGE = (
-    "Produis une seule photographie : pas de texte, pas de légende, pas de filigrane, pas de bordure, pas "
-    "d'écran partagé, pas de montage de plusieurs images."
-)
+SINGLE_IMAGE = "Une seule photo, sans texte, filigrane, bordure ni montage."
 
 
 def render_prompt(*, master: bool, references: list[str], brief: str | None, people: bool) -> str:
@@ -74,40 +62,28 @@ def render_prompt(*, master: bool, references: list[str], brief: str | None, peo
     parts = [GEOMETRY_LOCK]
     index = 2
     if master:
-        parts.append(
-            f"L'image {index} est l'image maître validée du projet : reprends exactement ses matériaux, sa "
-            "palette de couleurs, sa lumière, sa balance des blancs et son style photographique, pour que "
-            "toutes les images semblent venir de la même séance photo dans le même lieu. Prends-lui seulement "
-            "son style, jamais son cadrage ni la disposition de ses meubles."
-        )
+        parts.append(f"Image {index} : image maître validée. Reprends exactement ses matériaux, couleurs, lumière et "
+                     "style, comme pour la même séance photo, mais pas son cadrage ni ses meubles.")
         index += 1
     if references:
         listed = " ; ".join(f"image {index + offset} : {name}" for offset, name in enumerate(references))
-        parts.append(
-            "Les images suivantes sont des références de matériaux et d'ambiance. Utilise chacune là où son nom "
-            f"l'indique, sans copier son cadrage ni ses objets : {listed}."
-        )
+        parts.append(f"Références de matériaux et d'ambiance, à utiliser là où leur nom l'indique, sans copier leur "
+                     f"cadrage : {listed}.")
     parts += [MATERIALS, LIGHT, PHOTO_STYLE]
     if people:
         parts.append(PEOPLE)
     if brief:
-        parts.append(
-            "Consignes de l'architecte pour ce projet. Respecte-les : elles passent avant les matériaux et la "
-            f"lumière par défaut décrits plus haut.\n{brief}"
-        )
+        parts.append(f"Consignes de l'architecte, prioritaires sur ce qui précède :\n{brief}")
     parts.append(SINGLE_IMAGE)
     return "\n\n".join(parts)
 
 
 # --- Upscale par régénération (fournisseur Gemini, qui n'a pas de modèle d'upscale) -------------
 
-UPSCALE_PROMPT = "\n\n".join([
-    "Reproduis l'image 1 à l'identique, en plus haute définition. Garde strictement la même composition, le "
-    "même cadrage, la même perspective, et chaque objet, matériau, couleur, lumière et ombre à l'identique. "
-    "Ajoute seulement la finesse de détail, la texture et la netteté d'une photo haute définition : aucun "
-    "changement, aucun ajout, aucune suppression, aucun nouveau style.",
-    SINGLE_IMAGE,
-])
+UPSCALE_PROMPT = (
+    "Reproduis l'image 1 à l'identique en plus haute définition : même cadrage, mêmes objets, matériaux, "
+    "couleurs, lumières et ombres. Ajoute seulement finesse et netteté, sans rien changer.\n\n" + SINGLE_IMAGE
+)
 
 
 # --- Ambiances vidéo (deuxième vidéo : « du vent, du dynamisme, ou au contraire du calme ») -------
@@ -121,11 +97,10 @@ DEFAULT_AMBIANCE = "calme"
 
 # Style du mouvement dans la consigne vidéo, selon l'ambiance.
 VIDEO_STYLES = {
-    "calme": "Mouvement de caméra extrêmement lent, fluide et stabilisé, à vitesse constante, comme sur un "
-             "stabilisateur ou un rail. Seulement une vie discrète et naturelle : reflets du soleil, feuilles qui "
-             "bougent à peine.",
-    "dynamique": "Mouvement de caméra fluide et stabilisé, plus franc, avec de l'élan, sans à-coups. Du vent fait "
-                 "bouger la végétation et les tissus ; la vie autour du lieu est visible mais naturelle.",
+    "calme": "Caméra extrêmement lente, fluide, stabilisée, à vitesse constante ; seulement une vie discrète "
+             "(reflets du soleil, feuilles qui bougent à peine).",
+    "dynamique": "Caméra fluide et stabilisée, plus franche, avec de l'élan ; du vent dans la végétation et les "
+                 "tissus, une vie visible mais naturelle.",
 }
 
 
@@ -138,23 +113,14 @@ class Shot:
     motion: str   # mouvement de caméra et vie dans l'image (consigne pour la vidéo)
 
 
-STORYBOARD_SYSTEM = (
-    "Tu es directeur de la photographie et photographe d'architecture. Tu prépares de courts films de "
-    "présentation de projets d'architecture et d'architecture intérieure, tournés avec un appareil Fujifilm. "
-    "Tu réponds uniquement en JSON, et tous les textes de ta réponse sont en français."
-)
+STORYBOARD_SYSTEM = "Tu es directeur de la photographie spécialisé en architecture. Tu réponds en JSON, en français."
 
-STORYBOARD_REQUEST = """Écris un storyboard de {count} plans cinématiques du lieu visible sur l'image jointe.
-
-Règles :
-- Chaque plan montre CE MÊME lieu, avec la même architecture, les mêmes matériaux, le même mobilier, la même lumière et le même moment de la journée.
-- Varie les types de plans : scène d'entrée (on s'approche ou on entre), plan large d'ensemble, vol traversant en vue FPV à travers l'espace, détails de matières ou d'objets visibles sur l'image, scène de sortie (on recule ou on s'élève), éventuellement un accéléré (timelapse) où la lumière évolue, caméra fixe.
-- Ne montre que ce qui existe sur l'image, ou ce qui la prolonge de façon plausible juste hors du cadre. N'invente et ne modifie jamais de mobilier.
-- Chaque plan deviendra un clip vidéo de 5 secondes. Pour la consigne de mouvement : NE REDÉCRIS PAS l'architecture (le modèle vidéo la voit déjà sur l'image). Décris seulement le mouvement de caméra avec des mots précis (vue FPV, vol traversant, travelling avant ou arrière, glissement latéral, panoramique, élévation, caméra fixe), sa vitesse et son intensité avec des adjectifs (extrêmement lent, posé, fluide, stabilisé), et la vie discrète dans le plan (reflets du soleil, feuilles qui bougent, passants). Termine par : « Garde strictement la géométrie, aucun autre changement dans la scène. »
-- Ambiance voulue : {name} ({ambiance}).{same_image}
-
-Réponds uniquement avec ce JSON :
-{{"plans": [{{"titre": "titre court, 3 à 6 mots", "image": "description du cadrage et de ce qu'on voit", "mouvement": "consigne de mouvement pour la vidéo, comme décrit plus haut"}}]}}"""
+STORYBOARD_REQUEST = """Storyboard de {count} plans vidéo de 5 s du lieu de l'image.
+- Même lieu, mêmes architecture, matériaux, mobilier et lumière ; n'invente rien.
+- Varie les scènes : entrée, plan large, vol traversant en vue FPV, détail de matière, sortie, accéléré (timelapse) caméra fixe.
+- « mouvement » : ne redécris pas l'architecture. Donne le mouvement de caméra (vue FPV, vol traversant, travelling avant ou arrière, glissement latéral, panoramique, élévation), sa vitesse et la vie discrète du plan, en une ou deux phrases.
+- Ambiance : {name} ({ambiance}).{same_image}
+JSON : {{"plans": [{{"titre": "3 à 6 mots"{image_field}, "mouvement": "..."}}]}}"""
 
 # Plans utilisés quand aucun modèle de texte n'est réglé (RENDU_MODELE_LLM=aucun ou RENDU_GEMINI_MODELE_TEXTE=aucun).
 DEFAULT_SHOTS = (
@@ -174,28 +140,31 @@ DEFAULT_SHOTS = (
 )
 
 
-SAME_IMAGE_RULE = (
-    "\n- Tous les plans partent exactement de cette image, avec son cadrage : varie seulement le mouvement de "
-    "caméra, son intensité et le type de scène. Le champ « image » rappelle simplement ce qu'on voit au départ."
-)
+SAME_IMAGE_RULE = "\n- Tous les plans partent de cette image et de son cadrage : ne varie que le mouvement et la scène."
 
 
 def storyboard_request(count: int, ambiance: str = DEFAULT_AMBIANCE, same_image: bool = False) -> str:
-    """`same_image` : chaque plan sera animé à partir de l'image de départ elle-même (pas d'image par plan)."""
+    """`same_image` : chaque plan sera animé à partir de l'image de départ elle-même, sans image par plan
+    (le champ « image » est alors inutile : autant de tokens de réponse en moins)."""
     return STORYBOARD_REQUEST.format(count=count, name=ambiance, ambiance=AMBIANCES[ambiance],
-                                     same_image=SAME_IMAGE_RULE if same_image else "")
+                                     same_image=SAME_IMAGE_RULE if same_image else "",
+                                     image_field="" if same_image else ', "image": "cadrage et contenu"')
+
+
+def storyboard_schema(same_image: bool = False) -> dict:
+    """Format de réponse imposé au modèle de texte (pas de JSON mal formé à redemander)."""
+    fields = ["titre", "mouvement"] if same_image else ["titre", "image", "mouvement"]
+    plan = {"type": "OBJECT", "properties": {name: {"type": "STRING"} for name in fields}, "required": fields}
+    return {"type": "OBJECT", "properties": {"plans": {"type": "ARRAY", "items": plan}}, "required": ["plans"]}
 
 
 def shot_prompt(shot: Shot) -> str:
     """Consigne pour fabriquer l'image d'un plan à partir de l'image de départ (image 1)."""
     return "\n\n".join([
-        "L'image 1 est la photo validée d'un projet d'architecture. Crée une autre photo du MÊME lieu, comme "
-        "prise pendant la même séance photo quelques minutes plus tard, pour un storyboard cinématique.\n"
-        f"Plan : {shot.image}",
-        "Garde exactement la même architecture, les mêmes matériaux, le même mobilier, les mêmes œuvres, les "
-        "mêmes couleurs, la même direction de lumière, le même moment de la journée et le même étalonnage que "
-        "l'image 1. Ne montre que ce qui existe sur l'image 1, ou ce qui la prolonge de façon plausible juste "
-        "hors du cadre ; ne modifie ni n'ajoute jamais de mobilier.",
+        "Image 1 : photo validée du projet. Crée une autre photo du MÊME lieu, même séance quelques minutes plus "
+        f"tard. Plan : {shot.image}",
+        "Garde exactement architecture, matériaux, mobilier, couleurs, lumière et étalonnage ; ne montre que ce qui "
+        "existe ou le prolonge juste hors du cadre.",
         PHOTO_STYLE,
         SINGLE_IMAGE,
     ])
@@ -212,13 +181,14 @@ def parse_storyboard(text: str, count: int) -> list[Shot]:
         raise ValueError("la réponse ne contient pas de liste « plans »")
     shots = []
     for item in items[:count]:
-        if not isinstance(item, dict) or not str(item.get("image", "")).strip():
+        if not isinstance(item, dict):
             raise ValueError(f"plan mal formé : {item!r}")
-        shots.append(Shot(
-            title=str(item.get("titre", "")).strip() or f"Plan {len(shots) + 1}",
-            image=str(item["image"]).strip(),
-            motion=str(item.get("mouvement", "")).strip() or DEFAULT_MOTION,
-        ))
+        image = str(item.get("image", "")).strip()
+        motion = str(item.get("mouvement", "")).strip()
+        if not image and not motion:
+            raise ValueError(f"plan vide : {item!r}")
+        shots.append(Shot(title=str(item.get("titre", "")).strip() or f"Plan {len(shots) + 1}",
+                          image=image, motion=motion or DEFAULT_MOTION))
     return shots
 
 
@@ -227,10 +197,8 @@ def parse_storyboard(text: str, count: int) -> list[Shot]:
 DEFAULT_MOTION = "travelling avant vers le cœur du lieu, à hauteur d'œil"
 
 VIDEO_RULES = (
-    "Vidéo d'architecture cinématique. Garde strictement la géométrie : l'architecture, le mobilier et les "
-    "matériaux restent parfaitement rigides et identiques à la première image, sans déformation, sans "
-    "ondulation, sans rien qui apparaisse ou disparaisse. Rendu photoréaliste, couleurs naturelles Fujifilm. "
-    "Aucun autre changement dans la scène."
+    "Garde strictement la géométrie : architecture, mobilier et matériaux rigides et identiques à la première "
+    "image, sans déformation ni apparition. Photoréaliste, couleurs Fujifilm. Aucun autre changement dans la scène."
 )
 
 NEGATIVE_VIDEO = (
@@ -240,5 +208,4 @@ NEGATIVE_VIDEO = (
 
 
 def video_prompt(motion: str | None, ambiance: str = DEFAULT_AMBIANCE) -> str:
-    return (f"Caméra : {motion or DEFAULT_MOTION}.\n\nAmbiance {ambiance} : {AMBIANCES[ambiance]}.\n\n"
-            f"{VIDEO_STYLES[ambiance]}\n\n{VIDEO_RULES}")
+    return f"Caméra : {motion or DEFAULT_MOTION}.\n{VIDEO_STYLES[ambiance]}\n{VIDEO_RULES}"

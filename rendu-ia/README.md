@@ -100,7 +100,7 @@ Avec l'abonnement Google AI Pro que vous avez déjà, sans rien payer de plus :
 | Étape | Comment, gratuitement |
 |---|---|
 | 1. Les images | **Le plus simple** : partir d'images déjà faites (rendus de l'agence, photos de chantier, rendus Twinmotion). Sinon, Nano Banana Pro **à la main** dans l'application Gemini (inclus dans l'abonnement), avec la capture Archicad et la consigne de `rendu_ia/prompts.py`. Ou le programme avec une clé gratuite et Nano Banana 2 Lite (à tester, voir « Avec une clé gratuite »). |
-| 2. Les consignes vidéo | `python -m rendu_ia storyboard PROJET --image <image> --ambiance calme --sans-images --apply`, avec une **clé gratuite** : Gemini 3.5 Flash est dans l'offre gratuite. Le programme écrit les plans et leurs consignes de mouvement en français, selon la recette ci-dessus ; avec `--sans-images`, chaque plan reprend l'image de départ avec un mouvement de caméra différent, sans aucune image générée. Sans aucune clé, le programme prend 4 plans types (entrée, vol traversant, détail, sortie). |
+| 2. Les consignes vidéo | `python -m rendu_ia storyboard PROJET --image <image> --ambiance calme --sans-images --apply`, avec une **clé gratuite** : Gemini 3.5 Flash-Lite est dans l'offre gratuite, et une seule demande suffit par image. Le programme écrit les plans et leurs consignes de mouvement en français, selon la recette ci-dessus ; avec `--sans-images`, chaque plan reprend l'image de départ avec un mouvement de caméra différent, sans aucune image générée. Sans aucune clé, le programme prend 4 plans types (entrée, vol traversant, détail, sortie). |
 | 3. Les vidéos | `python -m rendu_ia video PROJET <images>` : sans clé fal.ai, le programme n'envoie rien et écrit une **fiche à suivre dans Flow**, avec l'image et la consigne de chaque plan. L'abonnement donne 1 000 crédits Flow par mois ; un clip Veo 3.1 Lite en coûte 10, soit une centaine d'essais par mois. On refait ensuite les plans réussis avec un modèle Veo plus soigné, comme le créateur teste en 480p avant la version finale. |
 | 4. L'agrandissement | vidéos : agrandissement en 1080p dans Flow, gratuit avec l'abonnement ; images : un logiciel gratuit sur votre PC, par exemple Upscayl. |
 | 5. Le montage | Clipchamp, fourni avec Windows, ou CapCut. |
@@ -113,6 +113,27 @@ Trois points à savoir avant de livrer à un client :
 
 **Les autres versions gratuites ne conviennent pas à un client.** Magnific (le nouveau nom de Freepik), Dreamina (Seedance) et Kling ont des comptes gratuits, mais sans vidéo pour Magnific, et avec filigrane et usage personnel seulement pour Dreamina et Kling. Pour reproduire exactement l'outil de la vidéo, il faut l'abonnement Magnific Premium (environ 14,50 $ par mois en annuel, 20 $ en mensuel), qui inclut Spaces et une licence commerciale.
 
+## Économiser les tokens et les demandes
+
+Chaque demande consomme des tokens (le texte des consignes, les images envoyées, la réponse) et compte dans le quota gratuit du jour. Le programme est réglé pour en dépenser le moins possible :
+
+| Réglage | Effet |
+|---|---|
+| Consignes condensées | environ 480 tokens par rendu au lieu de 890, 240 par storyboard au lieu de 590, 120 par vidéo au lieu de 200 |
+| Storyboard avec Gemini 3.5 Flash-Lite | modèle le plus léger, gratuit, au quota gratuit le plus large ; réflexion réduite au minimum utile |
+| Image du storyboard en définition moyenne | 560 tokens au lieu de 1 120 : pour écrire des mouvements de caméra, la composition suffit |
+| Réponse au format imposé | pas de réponse mal formée à redemander ; avec `--sans-images`, le modèle n'écrit que le titre et le mouvement de chaque plan |
+| Repli automatique | si Google refuse un de ces réglages, une seule nouvelle demande, simple, est faite |
+| Rien n'est refait | une image ou une vidéo déjà à jour n'est jamais redemandée |
+| Upscale sans doublon | des images identiques (plans qui reprennent l'image de départ) ne sont agrandies qu'une fois |
+| 2 essais par défaut | au lieu de 4 : chaque image est une demande |
+| `video --essai` | le mouvement est testé au plus bas prix avant la version finale |
+| Sans clé | `storyboard --sans-images` prend les plans types : aucun token |
+
+**Où va vraiment l'argent.** Pour une image, la consigne et les images envoyées pèsent peu : environ 4 000 tokens en entrée, soit moins d'un centime avec Nano Banana Pro, contre 0,134 $ pour l'image produite. Les vraies économies sont donc le nombre d'images demandées (`--nombre`, `--variantes`, ne refaire que ce qui a changé) et le modèle : Nano Banana 2 coûte deux fois moins cher que Nano Banana Pro. Google propose aussi un mode « flex », 50 % moins cher contre quelques minutes d'attente ; il sera branché quand on pourra le tester avec votre clé payante.
+
+**Pour suivre le projet sans rien dépenser** : `python -m rendu_ia etat PROJET` indique ce qui est fait, ce qui manque et la prochaine commande à lancer.
+
 ## Avant de commencer
 
 **Coût avec Gemini.** Ordre de grandeur relevé en octobre 2026, à vérifier sur la page des tarifs de l'API Gemini :
@@ -120,7 +141,7 @@ Trois points à savoir avant de livrer à un client :
 | Étape | Modèle par défaut | Prix indicatif |
 |---|---|---|
 | essais, rendus, plans du storyboard | Nano Banana Pro (`gemini-3-pro-image`) en 2K | environ 0,13 $ par image (4K : 0,24 $) |
-| écriture du storyboard | Gemini 3.5 Flash | moins de 0,01 $ |
+| écriture du storyboard | Gemini 3.5 Flash-Lite | gratuit avec une clé gratuite, sinon une fraction de centime |
 | upscale | Nano Banana Pro, image régénérée en 4K | environ 0,24 $ par image |
 | vidéo | Flow (Veo), dans l'abonnement | inclus, dans la limite des crédits Flow du mois |
 | option économique | Nano Banana 2 Lite (`gemini-3.1-flash-lite-image`), 1K | gratuit si l'offre gratuite le confirme, sinon environ 0,03 $ par image |
@@ -200,7 +221,7 @@ Ce qui marche sans payer, avec une clé créée dans un projet **sans facturatio
 
 | Étape | Gratuit ? |
 |---|---|
-| storyboard (Gemini 3.5 Flash) | **oui**, dans la limite du quota gratuit du jour (une vingtaine de demandes par jour d'après des mesures non officielles ; le chiffre exact est dans AI Studio, onglet *Rate limit*) |
+| storyboard (Gemini 3.5 Flash-Lite) | **oui**, dans la limite du quota gratuit du jour (plusieurs centaines de demandes par jour pour les modèles Flash-Lite d'après des mesures non officielles ; le chiffre exact est dans AI Studio, onglet *Rate limit*) |
 | images avec Nano Banana Pro ou Nano Banana 2 | **non** : pas d'offre gratuite dans l'API |
 | images avec Nano Banana 2 Lite | **à tester** : le guide officiel de Google le présente comme gratuit, la page des tarifs dit le contraire |
 | upscale | **non** par Gemini : Nano Banana 2 Lite ne dépasse pas 1K. Un logiciel gratuit d'agrandissement sur votre PC, par exemple Upscayl, fait l'affaire. |
@@ -250,6 +271,8 @@ Une image est refaite automatiquement quand son image de départ est plus récen
 
 Les exemples utilisent le projet `"C:\Projets\Appartement Arceaux"`, abrégé ici en `PROJET`.
 
+À tout moment, `python -m rendu_ia etat PROJET` fait le point (ce qui est fait, ce qui manque) et donne la prochaine commande, sans rien envoyer.
+
 ### Étape 1 : essais d'une vue, pour valider la direction
 
 ```
@@ -257,7 +280,7 @@ python -m rendu_ia essais PROJET --capture salon
 python -m rendu_ia essais PROJET --capture salon --apply
 ```
 
-Quatre propositions de la vue `captures\salon.png` arrivent dans `sorties\essais` (`--nombre 2` pour en avoir moins). Ajoutez `--personnages` pour avoir une ou deux personnes dans l'image. Si aucune ne convient, ajustez `ambiance.txt` ou les références et relancez avec `--refaire`.
+Deux propositions de la vue `captures\salon.png` arrivent dans `sorties\essais` (`--nombre 4` pour en avoir plus, chaque image étant une demande). Ajoutez `--personnages` pour avoir une ou deux personnes dans l'image. Si aucune ne convient, ajustez `ambiance.txt` ou les références et relancez avec `--refaire`.
 
 ### Étape 2 : verrouiller l'image maître
 
@@ -309,7 +332,7 @@ La commande prend les plans du storyboard (la version upscalée si elle est à j
 
 **Sans clé fal.ai (abonnement Google AI Pro)** : rien n'est envoyé. La commande écrit `sorties\videos\a_faire_dans_flow.txt`, une fiche avec, pour chaque plan, l'image à importer et le texte à coller dans **Flow** (<https://labs.google/flow>, mode « Frames to Video »). Les vidéos sont payées par les crédits Flow de l'abonnement.
 
-**Avec une clé fal.ai** : les vidéos sont faites automatiquement (relancer avec `--apply`), en 5 secondes, dans `sorties\videos`. Options : `--modele seedance`, `--duree 8`.
+**Avec une clé fal.ai** : les vidéos sont faites automatiquement (relancer avec `--apply`), en 5 secondes, dans `sorties\videos`. Options : `--modele seedance`, `--duree 8`, et `--essai` pour tester d'abord chaque mouvement au plus bas prix (durée minimale, 480p avec Seedance, rangé à part dans `sorties\videos\essais`), comme le créateur de la seconde vidéo avant sa version finale.
 
 Dans les deux cas, `--mouvement "glissement latéral très lent de gauche à droite"` impose un mouvement à tous les plans, et `--ambiance calme` ou `dynamique` remplace l'ambiance du storyboard. Les images peuvent aussi être des images existantes, données à la suite du projet : `python -m rendu_ia video PROJET "C:\Images agence\facade.jpg"`.
 
@@ -335,7 +358,7 @@ sorties\
 | `FAL_KEY` | | clé fal.ai ; sans elle, les vidéos passent par une fiche pour Flow |
 | `RENDU_FOURNISSEUR` | `gemini` si `GEMINI_API_KEY` est remplie, sinon `fal` | fournisseur des images, du storyboard et de l'upscale |
 | `RENDU_GEMINI_MODELE_IMAGE` | `gemini-3-pro-image` | Nano Banana Pro ; `gemini-3.1-flash-image` pour Nano Banana 2 ; `gemini-3.1-flash-lite-image` pour Nano Banana 2 Lite (gratuit à confirmer, 3 images et 1K au plus) |
-| `RENDU_GEMINI_MODELE_TEXTE` | `gemini-3.5-flash` | modèle Gemini qui écrit le storyboard ; `aucun` pour 4 plans types |
+| `RENDU_GEMINI_MODELE_TEXTE` | `gemini-3.5-flash-lite` | modèle Gemini qui écrit le storyboard ; `aucun` pour 4 plans types |
 | `RENDU_RESOLUTION` | `2K` (`1K` avec Nano Banana 2 Lite) | `1K`, `2K` ou `4K` |
 | `RENDU_FORMAT` | `auto` | format des images ; `auto` garde celui de la capture |
 | `RENDU_MODELE_IMAGE` | `fal-ai/nano-banana-pro/edit` | modèle d'image chez fal.ai |

@@ -32,8 +32,9 @@ class Provider(Protocol):
     def generate_images(self, prompt: str, inputs: list[Path], targets: list[Path]) -> list[Path]:
         """Une image par chemin de `targets` (sans extension), à partir des images `inputs`."""
 
-    def write_text(self, image: Path, system: str, prompt: str) -> str:
-        """Réponse du modèle de texte qui regarde `image` (storyboard)."""
+    def write_text(self, image: Path, system: str, prompt: str, schema: dict | None = None) -> str:
+        """Réponse du modèle de texte qui regarde `image` (storyboard). `schema` : format de réponse imposé,
+        si le fournisseur sait l'appliquer."""
 
     def upscale(self, source: Path, target: Path) -> Path: ...
 
@@ -131,9 +132,9 @@ class FalProvider:
             raise ServiceError(f"{len(urls)} image(s) reçue(s) sur {len(targets)} demandée(s).{note}")
         return [self.fal.download(url, target) for url, target in zip(urls, targets)]
 
-    def write_text(self, image: Path, system: str, prompt: str) -> str:
+    def write_text(self, image: Path, system: str, prompt: str, schema: dict | None = None) -> str:
         arguments = {"model": self.settings.llm_model, "system_prompt": system, "prompt": prompt,
-                     "image_urls": [self.fal.upload(image)]}
+                     "image_urls": [self.fal.upload(image, max_side=1024)]}
         return str(self.fal.run(VISION_ENDPOINT, arguments, kind="text").get("output", ""))
 
     def upscale(self, source: Path, target: Path) -> Path:
