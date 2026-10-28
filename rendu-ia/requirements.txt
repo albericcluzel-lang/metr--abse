@@ -2,3 +2,4 @@ fal-client>=1.0
 httpx>=0.27
 pillow>=10.0
 python-dotenv>=1.0
+imageio-ffmpeg>=0.5   # ffmpeg embarqué, pour la commande montage

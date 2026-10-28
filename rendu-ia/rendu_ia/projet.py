@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+from PIL import Image
 
 from .config import ConfigError
 
 IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".webp")
 VIDEO_SUFFIXES = (".mp4", ".mov", ".webm")
+CONVERTIBLE_SUFFIXES = (".tif", ".tiff", ".bmp", ".gif")   # autres formats d'export d'Archicad, convertis en PNG
+SYSTEM_FILES = ("thumbs.db", "desktop.ini")
 MAX_REFERENCES = 12   # le modèle d'image accepte 14 images : capture + image maître + 12 références
 
 BRIEF_TEMPLATE = """\
@@ -42,6 +47,32 @@ class Project:
         if not brief.exists():
             brief.write_text(BRIEF_TEMPLATE, encoding="utf-8")
         return cls(root)
+
+    def import_captures(self, source: str | Path) -> tuple[list[Path], list[str]]:
+        """Copie les images d'un dossier dans « captures » (TIFF, BMP et GIF convertis en PNG).
+        Une capture déjà à jour n'est pas recopiée. Rend les captures et les fichiers ignorés."""
+        folder = Path(source).expanduser()
+        if not folder.is_dir():
+            raise ConfigError(f"Dossier introuvable : {folder}")
+        imported, ignored = [], []
+        for path in sorted(folder.iterdir(), key=lambda path: path.name.lower()):
+            if not path.is_file() or path.name.startswith(".") or path.name.lower() in SYSTEM_FILES:
+                continue
+            suffix = path.suffix.lower()
+            if suffix in IMAGE_SUFFIXES:
+                target = self.root / "captures" / path.name
+                if not (target.is_file() and target.read_bytes() == path.read_bytes()):
+                    shutil.copy2(path, target)  # garde la date : une capture réexportée refera ses rendus
+            elif suffix in CONVERTIBLE_SUFFIXES:
+                target = self.root / "captures" / f"{path.stem}.png"
+                if not target.is_file() or target.stat().st_mtime < path.stat().st_mtime:
+                    with Image.open(path) as image:
+                        image.convert("RGBA" if "A" in image.getbands() else "RGB").save(target)
+            else:
+                ignored.append(path.name)
+                continue
+            imported.append(target)
+        return imported, ignored
 
     @property
     def output(self) -> Path:

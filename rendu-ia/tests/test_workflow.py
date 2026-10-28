@@ -1,4 +1,6 @@
 import json
+import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +37,7 @@ def run(*args) -> int:
 def test_simulation_sends_nothing(project, monkeypatch, capsys):
     def no_provider(settings):
         raise AssertionError("la simulation ne doit rien envoyer")
+    monkeypatch.setenv("FAL_KEY", "test")
     monkeypatch.setattr(cli, "make_provider", no_provider)
     assert run("essais", project.root, "--capture", "salon") == 0
     assert run("rendus", project.root) == 0
@@ -206,7 +209,8 @@ def test_nouveau_creates_the_project_skeleton(tmp_path):
 
 
 @pytest.mark.parametrize("args", [["essais", "p", "--nombre", "5"], ["rendus", "p", "--variantes", "0"],
-                                  ["storyboard", "p", "--plans", "9"], ["video", "p", "--modele", "sora"]])
+                                  ["storyboard", "p", "--plans", "9"], ["video", "p", "--modele", "sora"],
+                                  ["montage", "p", "--fondu", "3"], ["montage", "p", "--fondu", "vite"]])
 def test_rejects_invalid_options(args):
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(args)
@@ -346,3 +350,62 @@ def test_etat_gives_the_next_step_without_any_call(project, monkeypatch, capsys)
     assert run("etat", project.root) == 0
     out = capsys.readouterr().out
     assert "Rendus à jour : 0/2" in out and "Prochaine étape : python -m rendu_ia rendus" in out
+
+
+def test_without_key_images_are_made_by_hand_from_a_gemini_sheet(project, monkeypatch, capsys):
+    def no_provider(settings):
+        raise AssertionError("sans clé, rien n'est envoyé")
+    monkeypatch.setattr(cli, "make_provider", no_provider)
+    assert run("essais", project.root, "--capture", "salon") == 0
+    sheet = (project.output / "essais" / "a_faire_dans_gemini.txt").read_text(encoding="utf-8")
+    assert f"image 1 : {project.root / 'captures' / 'salon.png'}" in sheet
+    assert f"image 2 : {project.root / 'references'}" in sheet and "lancer 2 fois" in sheet
+    assert f"{project.output / 'essais' / 'salon_2'}.png" in sheet and "Image 1 : capture de la maquette" in sheet
+    assert "rendu_ia maitre" in sheet
+
+    make_image(project.output / "rendus" / "salon.png")
+    assert run("rendus", project.root) == 0
+    sheet = (project.output / "rendus" / "a_faire_dans_gemini.txt").read_text(encoding="utf-8")
+    assert "rendu cuisine.jpg" in sheet and "rendu salon.png" not in sheet
+    assert "1 vue(s)" in capsys.readouterr().out
+    make_image(project.output / "rendus" / "cuisine.jpg")
+    assert run("rendus", project.root) == 0
+    assert "Toutes les images sont déjà" in capsys.readouterr().out
+
+
+def test_nouveau_copies_captures_from_a_folder(tmp_path, capsys):
+    photos = tmp_path / "photos"
+    make_image(photos / "1 salon.jpg")
+    make_image(photos / "2 cuisine.tif", mode="RGBA", color=(10, 20, 30, 255))
+    (photos / "notes.txt").write_text("x", encoding="utf-8")
+    (photos / "Thumbs.db").write_bytes(b"x")
+    assert run("nouveau", tmp_path / "villa", "--depuis", photos) == 0
+    captures = tmp_path / "villa" / "captures"
+    assert sorted(path.name for path in captures.iterdir()) == ["1 salon.jpg", "2 cuisine.png"]
+    out = capsys.readouterr().out
+    assert "2 capture(s) copiée(s)" in out and "notes.txt" in out and "Thumbs.db" not in out
+    assert run("nouveau", tmp_path / "villa", "--depuis", tmp_path / "absent") == 1
+
+
+def test_montage_size_takes_the_narrowest_format():
+    from rendu_ia.montage import Clip, output_size
+    assert output_size([Clip(Path("a"), 4, 1920, 804, None), Clip(Path("b"), 4, 1526, 784, None)]) == (1920, 986)
+    assert output_size([Clip(Path("a"), 8, 1920, 1080, 24), Clip(Path("b"), 8, 1080, 1920, 24)]) == (1080, 1920)
+
+
+def test_montage_follows_the_plans_and_fills_gaps_with_images(project, capsys):
+    pytest.importorskip("imageio_ffmpeg")
+    from rendu_ia import montage
+    ffmpeg = montage.ffmpeg_exe()
+    make_image(project.output / "rendus" / "cuisine.png", size=(320, 180))
+    make_image(project.output / "rendus" / "salon.png", size=(320, 180))
+    clip = project.output / "videos" / "rendus" / "salon.mp4"
+    clip.parent.mkdir(parents=True)
+    subprocess.run([ffmpeg, "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=30:duration=2",
+                    "-pix_fmt", "yuv420p", str(clip)], check=True)
+    assert run("montage", project.root, "--fondu", "0,5", "--duree-image", "2") == 0
+    out = capsys.readouterr().out
+    assert out.index("cuisine.png (image, lent zoom)") < out.index("salon.mp4 (vidéo)")
+    result = montage.probe(ffmpeg, project.output / "montage.mp4")
+    assert (result.width, result.height, result.fps) == (320, 180, 30)
+    assert abs(result.seconds - 3.5) < 0.15   # 2 s + 2 s moins le fondu

@@ -1,4 +1,4 @@
-"""Ligne de commande : python -m rendu_ia {nouveau,essais,maitre,rendus,storyboard,upscale,video}."""
+"""Ligne de commande : python -m rendu_ia {nouveau,essais,maitre,rendus,storyboard,upscale,video,montage,etat}."""
 from __future__ import annotations
 
 import argparse
@@ -6,7 +6,7 @@ import dataclasses
 import sys
 from pathlib import Path
 
-from . import etapes, prompts
+from . import etapes, montage, prompts
 from .config import VIDEO_MODELS, ConfigError, FatalError, Settings, check_video_seconds
 from .etapes import Job
 from .gemini import GeminiProvider
@@ -42,6 +42,18 @@ def bounded_int(low: int, high: int):
     return parse
 
 
+def bounded_float(low: float, high: float):
+    def parse(value: str) -> float:
+        try:
+            number = float(value.replace(",", "."))
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"doit être un nombre entre {low:g} et {high:g}") from None
+        if not low <= number <= high:
+            raise argparse.ArgumentTypeError(f"doit être un nombre entre {low:g} et {high:g}")
+        return number
+    return parse
+
+
 def with_help(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     parser.add_argument("-h", "--aide", action="help", help="afficher cette aide et quitter")
     return parser
@@ -57,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     nouveau = command("nouveau", "créer un dossier de projet (captures, références, ambiance)")
     nouveau.add_argument("projet", help="dossier du projet à créer")
+    nouveau.add_argument("--depuis", help="dossier dont copier les images dans « captures » (par exemple vos exports "
+                         "Archicad)")
 
     def paid(name: str, help: str) -> argparse.ArgumentParser:
         sub = command(name, help)
@@ -103,6 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
     video.add_argument("--essai", action="store_true",
                        help="essai à moindre coût avant la version finale : durée minimale, 480p avec Seedance, "
                             "rangé dans « videos/essais »")
+
+    assemblage = command("montage", "mettre les vidéos bout à bout, avec un fondu entre chacune (gratuit, sur le PC)")
+    assemblage.add_argument("projet", help="dossier du projet")
+    assemblage.add_argument("fichiers", nargs="*", help="vidéos ou images dans l'ordre voulu (par défaut la vidéo de "
+                            "chaque plan, ou son image tant que la vidéo manque)")
+    assemblage.add_argument("--fondu", type=bounded_float(0, 2), default=0.5,
+                            help="durée du fondu en secondes, 0 pour enchaîner sans fondu (0,5)")
+    assemblage.add_argument("--duree-image", type=bounded_float(1, 15), default=4,
+                            help="durée à l'écran d'une image fixe, animée d'un lent zoom (4 secondes)")
+    assemblage.add_argument("--sortie", help="vidéo produite (par défaut sorties/montage.mp4)")
 
     etat = command("etat", "faire le point sur le projet et donner la prochaine commande (aucun appel)")
     etat.add_argument("projet", help="dossier du projet")
@@ -177,8 +201,14 @@ def cmd_nouveau(settings: Settings, args: argparse.Namespace) -> int:
     print(f"Projet créé : {project.root}\n"
           "  captures\\     vos vues 3D Archicad (une image par point de vue)\n"
           "  references\\   photos de matériaux et d'ambiance, nommées par leur usage\n"
-          "  ambiance.txt  l'ambiance voulue, en quelques lignes (facultatif)\n"
-          f"Ensuite : python -m rendu_ia essais \"{project.root}\"")
+          "  ambiance.txt  l'ambiance voulue, en quelques lignes (facultatif)")
+    if args.depuis:
+        imported, ignored = project.import_captures(args.depuis)
+        print(f"{len(imported)} capture(s) copiée(s) depuis {args.depuis} : "
+              f"{', '.join(path.name for path in imported) or 'aucune'}")
+        if ignored:
+            print(f"Ignoré(s), format non pris en charge : {', '.join(ignored)}")
+    print(f"Ensuite : python -m rendu_ia essais \"{project.root}\"")
     return 0
 
 
@@ -193,11 +223,13 @@ def cmd_essais(settings: Settings, args: argparse.Namespace) -> int:
         names = ", ".join(path.name for path in captures) or "aucune"
         raise ConfigError(f"Précisez la vue avec --capture (captures du projet : {names}).")
     warn_references(project, settings, master=False)
-    code = run_jobs(settings, etapes.essais_jobs(project, capture, args.nombre, args.personnages,
-                                                 settings.image_limits[0]), args)
+    jobs = etapes.essais_jobs(project, capture, args.nombre, args.personnages, settings.image_limits[0])
+    after = f"python -m rendu_ia maitre \"{project.root}\" <image choisie>"
+    if not settings.has_key:
+        return manual_images(project, jobs, args, "essais", "choisir la meilleure proposition, puis " + after)
+    code = run_jobs(settings, jobs, args)
     if args.apply and code == 0:
-        print(f"Choisissez la meilleure proposition dans {project.output / 'essais'}, puis :\n"
-              f"  python -m rendu_ia maitre \"{project.root}\" <image choisie>")
+        print(f"Choisissez la meilleure proposition dans {project.output / 'essais'}, puis :\n  {after}")
     return code
 
 
@@ -220,11 +252,27 @@ def cmd_rendus(settings: Settings, args: argparse.Namespace) -> int:
         print("Attention : pas d'image maître, les vues risquent de ne pas se ressembler. "
               "Conseil : lancer d'abord « essais » puis « maitre ».")
     warn_references(project, settings, master=project.master() is not None)
-    code = run_jobs(settings, etapes.rendus_jobs(project, captures, args.variantes, args.personnages,
-                                                 settings.image_limits[0]), args)
+    jobs = etapes.rendus_jobs(project, captures, args.variantes, args.personnages, settings.image_limits[0])
+    if not settings.has_key:
+        return manual_images(project, jobs, args, "rendus", f"python -m rendu_ia video \"{project.root}\" "
+                             "(une vidéo par rendu), ou storyboard pour plusieurs plans tirés d'une image")
+    code = run_jobs(settings, jobs, args)
     if args.apply and code == 0:
         print(f"Ensuite : python -m rendu_ia storyboard \"{project.root}\"")
     return code
+
+
+def manual_images(project: Project, jobs: list[Job], args: argparse.Namespace, folder: str, after: str) -> int:
+    """Sans clé API : fiche pour faire les images à la main dans l'application Gemini (aucun appel)."""
+    todo = etapes.pending(jobs, args.refaire)
+    if not todo:
+        print(f"Toutes les images sont déjà dans {project.output / folder} (--refaire pour refaire la fiche).\n"
+              f"Ensuite : {after}")
+        return 0
+    sheet = etapes.write_gemini_sheet(project, todo, folder, after)
+    print(f"Pas de clé API : les images se font à la main dans Gemini, avec l'abonnement Google AI Pro.\n"
+          f"Fiche à suivre, avec les images à joindre et le texte de chacune des {len(todo)} vue(s) : {sheet}")
+    return 0
 
 
 def cmd_storyboard(settings: Settings, args: argparse.Namespace) -> int:
@@ -354,8 +402,28 @@ def cmd_video(settings: Settings, args: argparse.Namespace) -> int:
         return 0
     code = run_jobs(settings, jobs, args, video=True)
     if args.apply and code == 0:
-        print(f"Vidéos dans {project.output / 'videos'} : il reste à les monter (Clipchamp, CapCut, Premiere...).")
+        print(f"Vidéos dans {project.output / 'videos'}. Ensuite : python -m rendu_ia montage \"{project.root}\"")
     return code
+
+
+def cmd_montage(settings: Settings, args: argparse.Namespace) -> int:
+    project = Project.open(args.projet)
+    clips = existing_files(args.fichiers) if args.fichiers else etapes.default_montage_clips(project)
+    if not clips:
+        raise ConfigError("Rien à monter : lancez d'abord « rendus » puis « video » (ou rangez dans "
+                          f"{project.output / 'videos'} les vidéos faites dans Flow).")
+    target = Path(args.sortie) if args.sortie else project.output / "montage.mp4"
+    print("Ordre du montage :")
+    for index, clip in enumerate(clips, start=1):
+        kind = "image, lent zoom" if clip.suffix.lower() in etapes.IMAGE_SUFFIXES else "vidéo"
+        print(f"  {index}. {clip} ({kind})")
+    print("Montage en cours...", flush=True)
+    read, seconds = montage.assemble(clips, target, args.fondu, args.duree_image)
+    width, height = montage.output_size(read)
+    print(f"Montage prêt : {target} ({seconds:.1f} s, {width}x{height}, sans le son).\n"
+          "Pour un autre ordre, donnez les vidéos une à une dans l'ordre voulu. La musique s'ajoute ensuite "
+          "dans Clipchamp ou CapCut.")
+    return 0
 
 
 def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
@@ -370,6 +438,11 @@ def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
     storyboards = sorted(path.parent for path in (out / "storyboard").glob("*/storyboard.json"))
     videos = etapes.video_jobs(project, settings, etapes.default_video_sources(project), None)
     videos_todo = etapes.pending(videos, False)
+    videos_done = len(videos) - len(videos_todo)
+    clips = etapes.default_montage_clips(project)
+    montage_file = out / "montage.mp4"
+    montage_done = bool(clips) and montage_file.is_file() and montage_file.stat().st_mtime >= max(
+        clip.stat().st_mtime for clip in clips)
     essais = [path for path in (out / "essais").glob("*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
     upscaled = [path for path in (out / "upscale").rglob("*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
 
@@ -382,7 +455,8 @@ def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
     for folder in storyboards:
         plans = [path for path in folder.glob("plan_*") if path.suffix.lower() in etapes.IMAGE_SUFFIXES]
         print(f"Storyboard « {folder.name} » : {len(plans)} plan(s)")
-    print(f"Images agrandies : {len(upscaled)} ; vidéos à jour : {len(videos) - len(videos_todo)}/{len(videos)}")
+    print(f"Images agrandies : {len(upscaled)} ; vidéos à jour : {videos_done}/{len(videos)} ; "
+          f"montage : {'à jour' if montage_done else 'à faire'}")
 
     if not captures and not storyboards:
         step = (f"déposez vos captures Archicad dans « captures », ou partez d'une image existante : "
@@ -391,12 +465,15 @@ def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
         step = f"python -m rendu_ia essais {root} --capture {captures[0].stem}"
     elif rendus_todo:
         step = f"python -m rendu_ia rendus {root}"
-    elif not storyboards:
-        step = f"python -m rendu_ia storyboard {root}"
+    elif not storyboards and not videos_done:
+        step = (f"python -m rendu_ia video {root} (une vidéo par rendu), ou python -m rendu_ia storyboard {root} "
+                "pour plusieurs plans tirés d'une image")
     elif videos_todo:
         step = f"python -m rendu_ia video {root}"
+    elif not montage_done:
+        step = f"python -m rendu_ia montage {root}"
     else:
-        step = "tout est à jour : il reste le montage (Clipchamp, CapCut...)."
+        step = f"tout est à jour, montage : {out / 'montage.mp4'}"
     print(f"Prochaine étape : {step}")
     return 0
 
@@ -412,7 +489,8 @@ def warn_references(project: Project, settings: Settings, master: bool) -> None:
 
 
 COMMANDS = {"nouveau": cmd_nouveau, "essais": cmd_essais, "maitre": cmd_maitre, "rendus": cmd_rendus,
-            "storyboard": cmd_storyboard, "upscale": cmd_upscale, "video": cmd_video, "etat": cmd_etat}
+            "storyboard": cmd_storyboard, "upscale": cmd_upscale, "video": cmd_video, "montage": cmd_montage,
+            "etat": cmd_etat}
 
 
 def main(argv: list[str] | None = None) -> int:

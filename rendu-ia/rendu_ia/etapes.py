@@ -30,6 +30,9 @@ class Job:
     suffixes: tuple[str, ...]
     run: Callable[[Provider], list[Path]]
     sources: list[Path] = field(default_factory=list)   # images de départ
+    # Pour la fiche à suivre à la main, sans clé API : consigne et images à joindre, dans l'ordre.
+    prompt: str = ""
+    inputs: list[Path] = field(default_factory=list)
 
     def done(self) -> bool:
         newest = max((source.stat().st_mtime for source in self.sources if source.is_file()), default=0.0)
@@ -106,7 +109,7 @@ def essais_jobs(project: Project, capture: Path, count: int, people: bool, max_i
     prompt = prompts.render_prompt(master=False, references=labels, brief=project.brief(), people=people)
     targets = [project.output / "essais" / f"{capture.stem}_{index}" for index in range(1, count + 1)]
     return [Job(f"essais {capture.name} ({count} image(s))", targets, IMAGE_SUFFIXES,
-                lambda provider: provider.generate_images(prompt, inputs, targets), [capture])]
+                lambda provider: provider.generate_images(prompt, inputs, targets), [capture], prompt, inputs)]
 
 
 def rendus_jobs(project: Project, captures: list[Path], variants: int, people: bool, max_inputs: int) -> list[Job]:
@@ -121,8 +124,40 @@ def rendus_jobs(project: Project, captures: list[Path], variants: int, people: b
         jobs.append(Job(f"rendu {capture.name}", targets, IMAGE_SUFFIXES,
                         lambda provider, prompt=prompt, inputs=inputs, targets=targets:
                         provider.generate_images(prompt, inputs, targets),
-                        [capture] + ([master] if master else [])))
+                        [capture] + ([master] if master else []), prompt, inputs))
     return jobs
+
+
+GEMINI_HEADER = """\
+Images à faire à la main dans Gemini (gemini.google.com ou l'application), sans clé API : les crédits
+de l'abonnement Google AI Pro suffisent.
+
+Avant de commencer : dans les réglages de Gemini, désactiver le filigrane visible s'il est proposé
+(réglage apparu en août 2026, valable pour les images créées ensuite).
+
+Pour chaque vue ci-dessous :
+1. Ouvrir une nouvelle conversation (sinon Gemini mélange les vues).
+2. Choisir l'outil « Créer des images » et le modèle « Pro » (ou « Raisonnement ») : c'est Nano Banana Pro.
+3. Joindre les images dans l'ordre indiqué : le texte les appelle image 1, image 2...
+4. Coller le texte, lancer. Si la géométrie bouge, relancer plutôt que corriger par la discussion.
+5. Télécharger l'image en pleine taille et la ranger sous le nom indiqué (extension .png ou .jpg) :
+   relancer la commande ne la redemandera pas.
+"""
+
+
+def write_gemini_sheet(project: Project, jobs: list[Job], folder: str, after: str) -> Path:
+    """Fiche à suivre dans l'application Gemini : images à joindre, texte à coller et nom du résultat."""
+    blocks = [GEMINI_HEADER]
+    for index, job in enumerate(jobs, start=1):
+        images = "\n".join(f"  image {number} : {path}" for number, path in enumerate(job.inputs, start=1))
+        saves = "\n".join(f"  {target}.png" for target in job.targets)
+        repeat = f" (lancer {len(job.targets)} fois, une image par nom)" if len(job.targets) > 1 else ""
+        blocks.append(f"--- {index}. {job.label}\nImages à joindre :\n{images}\n"
+                      f"Résultat à ranger sous{repeat} :\n{saves}\n\nTexte à coller :\n{job.prompt}\n")
+    blocks.append(f"Ensuite : {after}\n")
+    path = project.output / folder / "a_faire_dans_gemini.txt"
+    write_atomic(path, "\n".join(blocks).encode("utf-8"))
+    return path
 
 
 def lock_master(project: Project, image: Path) -> list[Path]:
@@ -327,6 +362,7 @@ Pour chaque plan ci-dessous :
    (« Ingredients to Video ») accepte sa photo en plus de l'image du lieu : ajoutez-la et décrivez ce qu'elle
    fait (« une femme traverse tranquillement l'espace de gauche à droite »).
 6. Ranger chaque vidéo téléchargée sous le nom indiqué : relancer la commande ne la refera pas.
+   Une fois toutes les vidéos rangées : python -m rendu_ia montage <projet> les met bout à bout.
 
 Si Veo suit mal une consigne, demandez à Gemini de la traduire en anglais : Google indique que Flow
 comprend le français mais donne de meilleurs résultats en anglais.
@@ -344,3 +380,15 @@ def write_flow_sheet(project: Project, sources: list[Path], motion: str | None, 
     path = project.output / "videos" / "a_faire_dans_flow.txt"
     write_atomic(path, "\n".join(blocks).encode("utf-8"))
     return path
+
+
+def default_montage_clips(project: Project) -> list[Path]:
+    """À monter : la vidéo de chaque plan, dans leur ordre (storyboard, sinon rendus par ordre alphabétique),
+    ou l'image du plan tant que sa vidéo manque ; puis les autres vidéos du dossier « videos » (essais exclus)."""
+    folder = project.output / "videos"
+    ordered = [find_output(folder / output_key(project, source), VIDEO_SUFFIXES) or source
+               for source in default_video_sources(project)]
+    others = sorted((path for path in folder.rglob("*") if path.is_file() and path.suffix.lower() in VIDEO_SUFFIXES
+                     and path.relative_to(folder).parts[0] != "essais" and path not in ordered),
+                    key=lambda path: path.relative_to(folder).as_posix().lower())
+    return ordered + others

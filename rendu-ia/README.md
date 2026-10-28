@@ -99,11 +99,11 @@ Avec l'abonnement Google AI Pro que vous avez déjà, sans rien payer de plus :
 
 | Étape | Comment, gratuitement |
 |---|---|
-| 1. Les images | **Le plus simple** : partir d'images déjà faites (rendus de l'agence, photos de chantier, rendus Twinmotion). Sinon, Nano Banana Pro **à la main** dans l'application Gemini (inclus dans l'abonnement), avec la capture Archicad et la consigne de `rendu_ia/prompts.py`. Ou le programme avec une clé gratuite et Nano Banana 2 Lite (à tester, voir « Avec une clé gratuite »). |
+| 1. Les images | **Le plus simple** : partir d'images déjà faites (rendus de l'agence, photos de chantier, rendus Twinmotion). Sinon, Nano Banana Pro **à la main** dans l'application Gemini (inclus dans l'abonnement) : sans clé, `essais` et `rendus` écrivent une **fiche Gemini** avec, pour chaque vue, les images à joindre, le texte à coller et le nom sous lequel ranger le résultat. Ou le programme avec une clé gratuite et Nano Banana 2 Lite (à tester, voir « Avec une clé gratuite »). |
 | 2. Les consignes vidéo | `python -m rendu_ia storyboard PROJET --image <image> --ambiance calme --sans-images --apply`, avec une **clé gratuite** : Gemini 3.5 Flash-Lite est dans l'offre gratuite, et une seule demande suffit par image. Le programme écrit les plans et leurs consignes de mouvement en français, selon la recette ci-dessus ; avec `--sans-images`, chaque plan reprend l'image de départ avec un mouvement de caméra différent, sans aucune image générée. Sans aucune clé, le programme prend 4 plans types (entrée, vol traversant, détail, sortie). |
 | 3. Les vidéos | `python -m rendu_ia video PROJET <images>` : sans clé fal.ai, le programme n'envoie rien et écrit une **fiche à suivre dans Flow**, avec l'image et la consigne de chaque plan. L'abonnement donne 1 000 crédits Flow par mois ; un clip Veo 3.1 Lite en coûte 10, soit une centaine d'essais par mois. On refait ensuite les plans réussis avec un modèle Veo plus soigné, comme le créateur teste en 480p avant la version finale. |
 | 4. L'agrandissement | vidéos : agrandissement en 1080p dans Flow, gratuit avec l'abonnement ; images : un logiciel gratuit sur votre PC, par exemple Upscayl. |
-| 5. Le montage | Clipchamp, fourni avec Windows, ou CapCut. |
+| 5. Le montage | `python -m rendu_ia montage PROJET` : les vidéos bout à bout avec un fondu, sur votre PC. Une image sans vidéo y devient un plan avec un lent zoom : sans aucun crédit Flow, les rendus suffisent pour une première vidéo. La musique s'ajoute ensuite dans Clipchamp ou CapCut. |
 
 Trois points à savoir avant de livrer à un client :
 
@@ -206,6 +206,14 @@ Ouvrez `.env` et collez la clé après `GEMINI_API_KEY=` (ou après `FAL_KEY=` p
 python -m rendu_ia nouveau "C:\Projets\Appartement Arceaux"
 ```
 
+Pour y copier directement vos exports Archicad (PNG, JPG, WEBP ; TIFF, BMP et GIF sont convertis en PNG) :
+
+```
+python -m rendu_ia nouveau "C:\Projets\Appartement Arceaux" --depuis "D:\Exports Archicad"
+```
+
+Les vidéos s'enchaînent dans l'ordre alphabétique des captures : numérotez-les dans l'ordre de la visite (`1 entree.png`, `2 sejour.png`...).
+
 Le dossier créé contient :
 
 ```
@@ -280,7 +288,9 @@ python -m rendu_ia essais PROJET --capture salon
 python -m rendu_ia essais PROJET --capture salon --apply
 ```
 
-Deux propositions de la vue `captures\salon.png` arrivent dans `sorties\essais` (`--nombre 4` pour en avoir plus, chaque image étant une demande). Ajoutez `--personnages` pour avoir une ou deux personnes dans l'image. Si aucune ne convient, ajustez `ambiance.txt` ou les références et relancez avec `--refaire`.
+Deux propositions de la vue `captures\salon.png` arrivent dans `sorties\essais` (`--nombre 4` pour en avoir plus, chaque image étant une demande).
+
+**Sans clé API** : rien n'est envoyé. La commande écrit `sorties\essais\a_faire_dans_gemini.txt`, une fiche pour faire les images à la main dans l'application Gemini avec l'abonnement Google AI Pro : images à joindre dans l'ordre, texte à coller, nom sous lequel ranger chaque image. Il en va de même à l'étape 3, avec `sorties\rendus\a_faire_dans_gemini.txt` ; relancer la commande refait la fiche avec les seules vues qui manquent. Ajoutez `--personnages` pour avoir une ou deux personnes dans l'image. Si aucune ne convient, ajustez `ambiance.txt` ou les références et relancez avec `--refaire`.
 
 ### Étape 2 : verrouiller l'image maître
 
@@ -336,7 +346,15 @@ La commande prend les plans du storyboard (la version upscalée si elle est à j
 
 Dans les deux cas, `--mouvement "glissement latéral très lent de gauche à droite"` impose un mouvement à tous les plans, et `--ambiance calme` ou `dynamique` remplace l'ambiance du storyboard. Les images peuvent aussi être des images existantes, données à la suite du projet : `python -m rendu_ia video PROJET "C:\Images agence\facade.jpg"`.
 
-Il reste à monter les clips (Clipchamp, fourni avec Windows, CapCut, Premiere...).
+### Étape 7 : montage
+
+```
+python -m rendu_ia montage PROJET
+```
+
+Gratuit, sur votre PC (ffmpeg est installé avec les dépendances). Les vidéos sont mises bout à bout dans l'ordre des plans (storyboard, sinon rendus par ordre alphabétique), avec un fondu de 0,5 seconde, dans `sorties\montage.mp4`, sans le son. Un plan dont la vidéo manque est remplacé par son image, avec un lent zoom de 4 secondes : le montage est complet à chaque étape. Le format est celui de la vue la plus étroite ; les plus larges ont des bandes noires en haut et en bas.
+
+Options : `--fondu 1` (0 pour enchaîner sans fondu), `--duree-image 6`, `--sortie "C:\Livraison\visite.mp4"`, ou les fichiers dans l'ordre voulu, vidéos ou images : `python -m rendu_ia montage PROJET entree.mp4 sejour.mp4 chambre.png`. La musique s'ajoute ensuite dans Clipchamp, fourni avec Windows, ou CapCut.
 
 ### Ce que contient le dossier `sorties`
 
@@ -348,7 +366,10 @@ sorties\
   storyboard\    storyboard.json et images des plans
   upscale\       images agrandies
   videos\        clips MP4
+  montage.mp4    la vidéo finale
 ```
+
+Sans clé, `essais`, `rendus` et `videos` contiennent aussi la fiche à suivre (`a_faire_dans_gemini.txt`, `a_faire_dans_flow.txt`).
 
 ## Réglages (fichier `.env`)
 
@@ -388,7 +409,7 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Le parcours sans clé a été essayé sur cinq vraies captures Archicad : copie avec `nouveau --depuis`, fiche Gemini, et montage par le vrai ffmpeg (images avec zoom et fondus, vidéos de test) ; les tests lancent eux aussi ffmpeg. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 
