@@ -373,6 +373,22 @@ def test_without_key_images_are_made_by_hand_from_a_gemini_sheet(project, monkey
     assert "Toutes les images sont déjà" in capsys.readouterr().out
 
 
+def test_finition_sheet_keeps_the_3d_render_and_needs_no_master(project, monkeypatch, capsys):
+    def no_provider(settings):
+        raise AssertionError("sans clé, rien n'est envoyé")
+    monkeypatch.setattr(cli, "make_provider", no_provider)
+    assert run("rendus", project.root, "--finition") == 0
+    sheet = (project.output / "rendus" / "a_faire_dans_gemini.txt").read_text(encoding="utf-8")
+    assert "Image 1 : rendu 3D du projet" in sheet and "capture de la maquette" not in sheet
+    assert "rendu cuisine.jpg" in sheet and "rendu salon.png" in sheet
+    assert "pas d'image maître" not in capsys.readouterr().out
+    assert run("rendus", project.root, "--refaire") == 0
+    assert "pas d'image maître" in capsys.readouterr().out
+    assert run("essais", project.root, "--capture", "salon", "--finition") == 0
+    assert "Image 1 : rendu 3D du projet" in (project.output / "essais" / "a_faire_dans_gemini.txt").read_text(
+        encoding="utf-8")
+
+
 def test_nouveau_copies_captures_from_a_folder(tmp_path, capsys):
     photos = tmp_path / "photos"
     make_image(photos / "1 salon.jpg")

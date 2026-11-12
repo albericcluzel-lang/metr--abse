@@ -52,16 +52,44 @@ PEOPLE = (
 
 SINGLE_IMAGE = "Une seule photo, sans texte, filigrane, bordure ni montage."
 
+# Finition : la vue est déjà un rendu 3D abouti (Twinmotion, D5, Redshift...). Ses matériaux et sa lumière
+# sont justes ; il ne reste qu'à lui retirer l'aspect image de synthèse.
 
-def render_prompt(*, master: bool, references: list[str], brief: str | None, people: bool) -> str:
+FINISH_LOCK = (
+    "Image 1 : rendu 3D du projet, qui fait foi. Garde exactement le cadrage, la position de caméra et la focale, "
+    "la géométrie, chaque meuble, luminaire, objet et tableau, et aussi les matériaux, les couleurs et la lumière : "
+    "direction du soleil, ombres, éclairages allumés. N'ajoute, ne retire et ne déplace rien."
+)
+
+FINISH = (
+    "Fais-en une vraie photo en retirant seulement l'aspect image de synthèse : surfaces trop lisses et uniformes, "
+    "arêtes trop parfaites, textures répétées, tissus et plantes rigides. Donne à chaque matériau son grain réel "
+    "et de légères imperfections, des reflets justes, des ombres de contact, une lumière renvoyée douce et des "
+    "fenêtres lumineuses sans être brûlées."
+)
+
+FINISH_STYLE = (
+    "Photo : magazine d'architecture, moyen format, hautes lumières douces, grain très fin, verticales droites, "
+    "textures nettes, aucun aspect HDR."
+)
+
+
+def render_prompt(*, master: bool, references: list[str], brief: str | None, people: bool,
+                  finish: bool = False) -> str:
     """Consigne pour transformer la capture 3D (image 1) en photo.
 
     Ordre des images envoyées : capture, image maître (si `master`), puis références.
     `references` : nom de chaque photo de référence, qui dit à quoi elle sert.
+    `finish` : l'image 1 est déjà un rendu 3D abouti, dont on garde aussi les matériaux et la lumière.
     """
-    parts = [GEOMETRY_LOCK]
+    parts = [FINISH_LOCK if finish else GEOMETRY_LOCK]
     index = 2
-    if master:
+    if master and finish:
+        parts.append(f"Image {index} : image maître validée. Reprends son rendu photo (grain, contraste, traitement "
+                     "des couleurs), comme pour la même séance photo, mais garde les matériaux, la lumière et le "
+                     "cadrage de l'image 1.")
+        index += 1
+    elif master:
         parts.append(f"Image {index} : image maître validée. Reprends exactement ses matériaux, couleurs, lumière et "
                      "style, comme pour la même séance photo, mais pas son cadrage ni ses meubles.")
         index += 1
@@ -69,7 +97,7 @@ def render_prompt(*, master: bool, references: list[str], brief: str | None, peo
         listed = " ; ".join(f"image {index + offset} : {name}" for offset, name in enumerate(references))
         parts.append(f"Références de matériaux et d'ambiance, à utiliser là où leur nom l'indique, sans copier leur "
                      f"cadrage : {listed}.")
-    parts += [MATERIALS, LIGHT, PHOTO_STYLE]
+    parts += [FINISH, FINISH_STYLE] if finish else [MATERIALS, LIGHT, PHOTO_STYLE]
     if people:
         parts.append(PEOPLE)
     if brief:

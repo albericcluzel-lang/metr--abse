@@ -71,6 +71,18 @@ def test_render_prompt_without_master_starts_references_at_image_2():
     assert text.index("Esprit années 60.") > text.index(prompts.LIGHT)  # le brief passe après les défauts
 
 
+def test_finish_prompt_keeps_materials_and_light_of_the_3d_render():
+    text = prompts.render_prompt(master=True, references=["sol parquet"], brief="Murs grège.", people=False,
+                                 finish=True)
+    assert text.startswith("Image 1 : rendu 3D du projet") and "les matériaux, les couleurs et la lumière" in text
+    assert "Image 2 : image maître validée. Reprends son rendu photo" in text and "image 3 : sol parquet" in text
+    # Rien de la recette par défaut, qui remplacerait les matériaux et la lumière du rendu.
+    assert prompts.MATERIALS not in text and prompts.LIGHT not in text and prompts.PHOTO_STYLE not in text
+    assert "capture de la maquette 3D" not in text
+    assert text.index("Murs grège.") > text.index(prompts.FINISH_STYLE)
+    assert text.endswith(prompts.SINGLE_IMAGE)
+
+
 def test_parse_storyboard_accepts_fenced_json_and_keeps_requested_count():
     shots = [{"titre": f"Plan {i}", "image": f"cadrage {i}", "mouvement": f"mouvement {i}"} for i in range(1, 6)]
     text = "Voici :\n```json\n" + json.dumps({"plans": shots}) + "\n```"

@@ -59,6 +59,10 @@ def with_help(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return parser
 
 
+FINITION_HELP = ("les vues sont déjà des rendus 3D (Twinmotion, D5...) : garder leurs matériaux et leur lumière, "
+                 "ne leur donner que l'aspect photo")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = with_help(argparse.ArgumentParser(
         prog="rendu_ia", add_help=False, description="Rendus photo et vidéo à partir de captures Archicad."))
@@ -84,6 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     essais.add_argument("--capture", help="vue à essayer (nom du fichier dans « captures »)")
     essais.add_argument("--nombre", type=bounded_int(1, 4), default=2, help="nombre de propositions (2)")
     essais.add_argument("--personnages", action="store_true", help="ajouter une ou deux personnes")
+    essais.add_argument("--finition", action="store_true", help=FINITION_HELP)
 
     maitre = command("maitre", "verrouiller l'image maître qui donne le style aux autres")
     maitre.add_argument("projet", help="dossier du projet")
@@ -93,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     rendus.add_argument("--capture", action="append", help="seulement cette vue (option répétable)")
     rendus.add_argument("--variantes", type=bounded_int(1, 4), default=1, help="images par vue (1)")
     rendus.add_argument("--personnages", action="store_true", help="ajouter une ou deux personnes")
+    rendus.add_argument("--finition", action="store_true", help=FINITION_HELP)
 
     storyboard = paid("storyboard", "plans cinématiques tirés d'une image (simulation par défaut)")
     storyboard.add_argument("--image", help="image de départ (par défaut l'image maître)")
@@ -223,7 +229,8 @@ def cmd_essais(settings: Settings, args: argparse.Namespace) -> int:
         names = ", ".join(path.name for path in captures) or "aucune"
         raise ConfigError(f"Précisez la vue avec --capture (captures du projet : {names}).")
     warn_references(project, settings, master=False)
-    jobs = etapes.essais_jobs(project, capture, args.nombre, args.personnages, settings.image_limits[0])
+    jobs = etapes.essais_jobs(project, capture, args.nombre, args.personnages, settings.image_limits[0],
+                              args.finition)
     after = f"python -m rendu_ia maitre \"{project.root}\" <image choisie>"
     if not settings.has_key:
         return manual_images(project, jobs, args, "essais", "choisir la meilleure proposition, puis " + after)
@@ -248,11 +255,12 @@ def cmd_rendus(settings: Settings, args: argparse.Namespace) -> int:
     captures = [project.find_capture(name) for name in args.capture] if args.capture else project.captures()
     if not captures:
         raise ConfigError(f"Aucune capture dans {project.root / 'captures'} (PNG, JPG ou WEBP).")
-    if project.master() is None:
+    if project.master() is None and not args.finition:   # en finition, le rendu 3D tient déjà les vues ensemble
         print("Attention : pas d'image maître, les vues risquent de ne pas se ressembler. "
               "Conseil : lancer d'abord « essais » puis « maitre ».")
     warn_references(project, settings, master=project.master() is not None)
-    jobs = etapes.rendus_jobs(project, captures, args.variantes, args.personnages, settings.image_limits[0])
+    jobs = etapes.rendus_jobs(project, captures, args.variantes, args.personnages, settings.image_limits[0],
+                              args.finition)
     if not settings.has_key:
         return manual_images(project, jobs, args, "rendus", f"python -m rendu_ia video \"{project.root}\" "
                              "(une vidéo par rendu), ou storyboard pour plusieurs plans tirés d'une image")

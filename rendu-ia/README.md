@@ -7,7 +7,7 @@ Ce programme reproduit le workflow de deux vidéos TikTok du même créateur (co
 
 Toutes les consignes envoyées aux modèles sont en français, comme celles qu'on voit à l'écran dans la seconde vidéo, où le créateur les donne à Seedance 2.0. Google indique que Veo (Flow) comprend le français mais réussit mieux en anglais, et aucune source ne garantit le français pour Kling : si un modèle suit mal une consigne, faites-la traduire en anglais par Gemini, ou utilisez `--modele seedance` avec fal.ai.
 
-**Pour tout faire gratuitement** avec l'abonnement Google AI Pro, voir la section « Tout faire gratuitement ».
+**Pour tout faire gratuitement** avec l'abonnement Google AI Pro, voir la section « Tout faire gratuitement ». **Pour le résultat le plus abouti**, toujours gratuitement, voir « Le plus abouti : Twinmotion, puis finition photo ».
 
 Deux fournisseurs au choix :
 
@@ -271,6 +271,26 @@ L'IA garde ce qu'elle voit sur la capture : plus la maquette est précise, plus 
 
 **Ambiance** : écrivez dans `ambiance.txt` ce qui doit changer par rapport au look par défaut, en français : « Lumière du matin, ciel couvert », « Murs blanc cassé, touches de terracotta », etc.
 
+## Le plus abouti : Twinmotion, puis finition photo
+
+Twinmotion calcule un vrai rendu 3D de la maquette Archicad : la géométrie, les matériaux et la lumière sont exacts, et la vidéo est une vraie visite, où la caméra se déplace dans les pièces. L'IA n'a plus qu'à retirer l'aspect image de synthèse. Inutile d'y passer la nuit, comme le dit l'auteur de la première vidéo : un réglage rapide suffit, la finition se fait dans Gemini. Les noms de boutons ci-dessous viennent de la documentation d'Epic et peuvent varier selon la version.
+
+1. **Installer** Twinmotion (twinmotion.com) et le module « Datasmith Exporter for Archicad » (twinmotion.com/plugins/archicad), dans la version de votre Archicad. Twinmotion est gratuit, usage commercial compris, pour une société qui fait moins de 1 million de dollars de chiffre d'affaires sur 12 mois, et coûte 445 $ par poste et par an au-delà : à vérifier sur twinmotion.com/license. Il faut une carte graphique dédiée : 6 Go de mémoire vidéo au moins, 8 Go ou plus pour le calcul le plus réaliste (Path Tracer, sous Windows seulement), d'après des sites tiers.
+2. **Synchroniser** : dans Archicad, bouton *Synchronize with Direct Link* de la barre Datasmith ; dans Twinmotion, *Import*, onglet *Direct Link*, puis *Import*. Chaque nouveau clic sur le bouton d'Archicad met la scène à jour.
+3. **Régler la lumière** (heure, soleil, éclairages allumés), reprendre les points de vue d'Archicad et **exporter** une image par vue, dans un même dossier. Pour la vidéo, créer un parcours de caméra et l'exporter en MP4.
+4. **Finition photo** des images :
+
+```
+python -m rendu_ia nouveau PROJET --depuis <dossier des images de Twinmotion>
+python -m rendu_ia rendus PROJET --finition
+```
+
+Avec `--finition`, la consigne garde les matériaux, les couleurs et la lumière du rendu 3D et ne demande que l'aspect photo, au lieu d'appliquer la recette par défaut (chêne, murs grège, soleil de fin d'après-midi). L'image maître devient inutile : le rendu 3D tient déjà les vues ensemble. Sans clé, la commande écrit la fiche Gemini, comme pour des captures ; `essais` accepte la même option.
+
+5. **Vidéo** : rangez la vidéo de Twinmotion dans `PROJET\sorties\videos` ; `python -m rendu_ia montage PROJET` la place après les autres plans (pour un autre ordre, donnez les fichiers un à un). Pour animer une image en particulier, `video` et Flow restent disponibles.
+
+Sans carte graphique suffisante, restez sur les captures Archicad et Gemini : c'est le parcours décrit dans la suite.
+
 ## Utilisation, étape par étape
 
 Chaque commande s'arrête en simulation : relisez ce qu'elle annonce, puis relancez-la avec `--apply`.
@@ -306,7 +326,7 @@ Gratuit. L'image choisie devient `sorties\maitre.png` et sert de référence de 
 python -m rendu_ia rendus PROJET --apply
 ```
 
-Chaque capture est rendue avec l'image maître et les références : les vues ont les mêmes matériaux, la même lumière et le même étalonnage. Résultats dans `sorties\rendus`. Options : `--capture cuisine` pour une seule vue, `--variantes 2` pour deux propositions par vue.
+Chaque capture est rendue avec l'image maître et les références : les vues ont les mêmes matériaux, la même lumière et le même étalonnage. Résultats dans `sorties\rendus`. Options : `--capture cuisine` pour une seule vue, `--variantes 2` pour deux propositions par vue, `--finition` si les vues sont déjà des rendus 3D (voir « Le plus abouti »).
 
 ### Étape 4 : storyboard
 
@@ -409,7 +429,7 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Le parcours sans clé a été essayé sur cinq vraies captures Archicad : copie avec `nouveau --depuis`, fiche Gemini, et montage par le vrai ffmpeg (images avec zoom et fondus, vidéos de test) ; les tests lancent eux aussi ffmpeg. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Le parcours sans clé a été essayé sur cinq vraies captures Archicad : copie avec `nouveau --depuis`, fiche Gemini, et montage par le vrai ffmpeg (images avec zoom et fondus, vidéos de test) ; les tests lancent eux aussi ffmpeg. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. La consigne de finition (`--finition`) n'a pas non plus été essayée sur un vrai rendu Twinmotion. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 
