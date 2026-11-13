@@ -3,3 +3,5 @@ httpx>=0.27
 pillow>=10.0
 python-dotenv>=1.0
 imageio-ffmpeg>=0.5   # ffmpeg embarqué, pour la commande montage
+numpy>=1.26
+opencv-python-headless>=4.8   # retouche et film sur le PC

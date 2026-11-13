@@ -1,16 +1,19 @@
-"""Ligne de commande : python -m rendu_ia {nouveau,essais,maitre,rendus,storyboard,upscale,video,montage,etat}."""
+"""Ligne de commande : python -m rendu_ia {nouveau,essais,maitre,rendus,storyboard,upscale,video,montage,
+retouche,film,auto,etat}."""
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import importlib
 import sys
+import zlib
 from pathlib import Path
 
-from . import etapes, montage, prompts
+from . import archicad, etapes, montage, prompts
 from .config import VIDEO_MODELS, ConfigError, FatalError, Settings, check_video_seconds
 from .etapes import Job
 from .gemini import GeminiProvider
-from .projet import Project
+from .projet import CONVERTIBLE_SUFFIXES, Project
 from .service import FalProvider, Provider, ServiceError
 
 # Textes de l'aide et des erreurs de la ligne de commande : argparse les fournit en anglais.
@@ -59,6 +62,7 @@ def with_help(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     return parser
 
 
+FILM_FORMATS = ("cinema", "16/9")
 FINITION_HELP = ("les vues sont déjà des rendus 3D (Twinmotion, D5...) : garder leurs matériaux et leur lumière, "
                  "ne leur donner que l'aspect photo")
 
@@ -133,6 +137,38 @@ def build_parser() -> argparse.ArgumentParser:
     assemblage.add_argument("--duree-image", type=bounded_float(1, 15), default=4,
                             help="durée à l'écran d'une image fixe, animée d'un lent zoom (4 secondes)")
     assemblage.add_argument("--sortie", help="vidéo produite (par défaut sorties/montage.mp4)")
+
+    retouche = command("retouche", "retoucher les vues sur le PC : lumière, textures, grain photo (gratuit, sans IA)")
+    retouche.add_argument("projet", help="dossier du projet")
+    retouche.add_argument("--capture", action="append", help="seulement cette vue (option répétable)")
+    retouche.add_argument("--finition", action="store_true",
+                          help="les vues sont déjà des rendus 3D (Twinmotion, PhotoRendu d'Archicad) : garder leur "
+                               "lumière et leurs matériaux, ne poser que le halo, le vignetage et le grain")
+    retouche.add_argument("--refaire", action="store_true", help="refaire aussi ce qui existe déjà")
+
+    film = command("film", "filmer les images : mouvements de caméra lents, jeu de lumière, fondus, grain de film "
+                   "(gratuit, sans IA)")
+    film.add_argument("projet", help="dossier du projet")
+    film.add_argument("fichiers", nargs="*", help="images dans l'ordre voulu (par défaut la meilleure version de "
+                      "chaque vue, selon le plan écrit dans film.txt)")
+    film.add_argument("--format", choices=FILM_FORMATS, default=FILM_FORMATS[0],
+                      help="cinema (2,39, comme au cinéma) ou 16/9")
+    film.add_argument("--duree-plan", type=bounded_float(2, 15), default=5.5, help="durée de chaque plan (5,5 secondes)")
+    film.add_argument("--fondu", type=bounded_float(0, 3), default=1.2,
+                      help="durée du fondu entre deux plans, 0 pour enchaîner sans fondu (1,2 seconde)")
+    film.add_argument("--sortie", help="vidéo produite (par défaut sorties/film.mp4)")
+
+    auto = command("auto", "tout enchaîner sans intervention : import des vues, retouche (ou rendus IA), film")
+    auto.add_argument("projet", help="dossier du projet (créé s'il n'existe pas)")
+    auto.add_argument("--depuis", help="dossier des images exportées d'Archicad ou de Twinmotion")
+    auto.add_argument("--archicad", metavar="JEU", help="faire d'abord publier ce jeu de publication par Archicad, "
+                      "ouvert sur ce PC avec l'extension Tapir : les vues sont exportées sans y toucher")
+    auto.add_argument("--ia", action="store_true", help="faire les rendus par l'IA (clé API nécessaire, demandes "
+                      "payées ou décomptées) au lieu de la retouche gratuite sur le PC")
+    auto.add_argument("--finition", action="store_true", help="les vues sont déjà des rendus 3D (Twinmotion, "
+                      "PhotoRendu d'Archicad) : garder leur lumière et leurs matériaux")
+    auto.add_argument("--format", choices=FILM_FORMATS, default=FILM_FORMATS[0],
+                      help="format du film : cinema (2,39) ou 16/9")
 
     etat = command("etat", "faire le point sur le projet et donner la prochaine commande (aucun appel)")
     etat.add_argument("projet", help="dossier du projet")
@@ -434,6 +470,123 @@ def cmd_montage(settings: Settings, args: argparse.Namespace) -> int:
     return 0
 
 
+def local_module(name: str):
+    """Module de retouche ou de film : il a besoin d'OpenCV et de NumPy, chargés seulement pour ces commandes."""
+    try:
+        return importlib.import_module(f"{__package__}.{name}")
+    except ImportError as exc:
+        raise ConfigError("Cette commande a besoin d'OpenCV et de NumPy : pip install -r requirements.txt") from exc
+
+
+def cmd_retouche(settings: Settings, args: argparse.Namespace) -> int:
+    project = Project.open(args.projet)
+    captures = [project.find_capture(name) for name in args.capture] if args.capture else project.captures()
+    if not captures:
+        raise ConfigError(f"Aucune capture dans {project.root / 'captures'} (PNG, JPG ou WEBP).")
+    retouche = local_module("retouche")
+    todo = [capture for capture in captures if args.refaire or not etapes.retouch_done(project, capture)]
+    if len(todo) < len(captures):
+        print(f"{len(captures) - len(todo)} déjà fait(s), sauté(s) (--refaire pour les refaire).")
+    for capture in todo:
+        print(f"Retouche de {capture.name}...", flush=True)
+        try:
+            retouche.retouch_file(capture, etapes.retouch_target(project, capture),
+                                  zlib.crc32(capture.stem.encode("utf-8")), args.finition)
+        except ValueError as exc:
+            raise ConfigError(str(exc)) from exc
+    if todo:
+        print(f"{len(todo)} vue(s) retouchée(s) dans {project.output / 'retouches'}.")
+    print(f"Ensuite : python -m rendu_ia film \"{project.root}\"")
+    return 0
+
+
+def cmd_film(settings: Settings, args: argparse.Namespace) -> int:
+    project = Project.open(args.projet)
+    film = local_module("film")
+    plan_file = project.root / "film.txt"
+    kinds: dict[Path, str] = {}
+    try:
+        if args.fichiers:
+            images = existing_files(args.fichiers)
+            for image in images:
+                if image.suffix.lower() not in etapes.IMAGE_SUFFIXES:
+                    raise ConfigError(f"Le film se fait à partir d'images, pas de {image.name} : pour assembler "
+                                      "des vidéos, utilisez « montage ».")
+            shots = film.automatic_plan(images)
+        else:
+            kinds = dict(etapes.film_sources(project))
+            if not kinds:
+                raise ConfigError(f"Aucune vue à filmer : déposez vos images dans {project.root / 'captures'}.")
+            if plan_file.is_file():
+                shots = film.parse_plan(plan_file.read_text(encoding="utf-8-sig"), list(kinds))
+                left = [path.stem for path in kinds if path not in {shot.image for shot in shots}]
+                if left:
+                    print(f"Vues absentes de {plan_file.name}, laissées de côté : {', '.join(left)}.")
+            else:
+                shots = film.automatic_plan(list(kinds))
+                plan_file.write_text(film.format_plan(shots), encoding="utf-8")
+                print(f"Plan du film écrit dans {plan_file} : modifiez-le pour changer l'ordre ou les mouvements.")
+        target = Path(args.sortie) if args.sortie else project.output / "film.mp4"
+        print("Plans du film :")
+        for index, shot in enumerate(shots, start=1):
+            aim = f" vers {shot.target[0] * 100:.0f},{shot.target[1] * 100:.0f}" if shot.target else ""
+            kind = f" ({kinds[shot.image]})" if shot.image in kinds else ""
+            print(f"  {index}. {shot.image.name}{kind} : {shot.move}{aim}")
+        print("Film en cours (une à trois minutes pour sept plans)...", flush=True)
+
+        def progress(done: int, total: int) -> None:
+            if done * 10 // total > (done - 1) * 10 // total and done < total:
+                print(f"  {done * 100 // total} %", flush=True)
+
+        seconds = film.render(shots, target, ratio=film.FORMATS[args.format], width=film.WIDTH, fps=film.FPS,
+                              seconds=args.duree_plan, dissolve=args.fondu, progress=progress)
+    except ValueError as exc:      # image illisible
+        raise ConfigError(str(exc)) from exc
+    width, height = film.frame_size(film.FORMATS[args.format], film.WIDTH)
+    print(f"Film prêt : {target} ({seconds:.1f} s, {width}x{height}, sans le son).\n"
+          "La musique s'ajoute ensuite dans Clipchamp ou CapCut.")
+    return 0
+
+
+def cmd_auto(settings: Settings, args: argparse.Namespace) -> int:
+    """Tout le parcours d'une traite : les vues entrent, le film sort. Relancé sans rien de nouveau,
+    il ne refait rien."""
+    project = Project.create(args.projet)
+    if args.archicad:
+        export = project.root / "export_archicad"
+        print(f"Archicad publie le jeu « {args.archicad} »...", flush=True)
+        archicad.publish(args.archicad, export)
+        # Le jeu peut ranger ses vues dans des sous-dossiers : on prend les images où qu'elles soient.
+        folders = sorted({path.parent for path in export.rglob("*") if path.is_file()
+                          and path.suffix.lower() in etapes.IMAGE_SUFFIXES + CONVERTIBLE_SUFFIXES})
+        count = sum(len(project.import_captures(folder)[0]) for folder in folders)
+        print(f"{count} vue(s) reçue(s) d'Archicad.")
+    if args.depuis:
+        imported, _ = project.import_captures(args.depuis)
+        print(f"{len(imported)} vue(s) prise(s) dans {args.depuis}.")
+    if not project.captures():
+        raise ConfigError(f"Aucune vue dans {project.root / 'captures'} : donnez --depuis <dossier des images> "
+                          "ou --archicad <jeu de publication>.")
+    if args.ia:
+        if not settings.has_key:
+            raise ConfigError("--ia demande une clé API (GEMINI_API_KEY ou FAL_KEY, voir « Mise en place »). "
+                              "Sans clé, lancez « auto » sans --ia : la retouche se fait sur le PC.")
+        code = cmd_rendus(settings, argparse.Namespace(projet=args.projet, capture=None, variantes=1,
+                                                       personnages=False, finition=args.finition, apply=True,
+                                                       refaire=False))
+    else:
+        code = cmd_retouche(settings, argparse.Namespace(projet=args.projet, capture=None, finition=args.finition,
+                                                         refaire=False))
+    if code:
+        return code
+    target = project.output / "film.mp4"
+    if etapes.film_done(project) and args.format == FILM_FORMATS[0]:
+        print(f"Film déjà à jour : {target}")
+        return 0
+    return cmd_film(settings, argparse.Namespace(projet=args.projet, fichiers=[], format=args.format,
+                                                 duree_plan=5.5, fondu=1.2, sortie=None))
+
+
 def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
     """Le point sur le projet, sans aucun appel : ce qui est fait, ce qui manque, la prochaine commande."""
     project = Project.open(args.projet)
@@ -465,6 +618,9 @@ def cmd_etat(settings: Settings, args: argparse.Namespace) -> int:
         print(f"Storyboard « {folder.name} » : {len(plans)} plan(s)")
     print(f"Images agrandies : {len(upscaled)} ; vidéos à jour : {videos_done}/{len(videos)} ; "
           f"montage : {'à jour' if montage_done else 'à faire'}")
+    retouched = sum(etapes.retouch_done(project, capture) for capture in captures)
+    print(f"Sans IA, sur le PC : retouches à jour : {retouched}/{len(captures)} ; "
+          f"film : {'à jour' if etapes.film_done(project) else 'à faire'}")
 
     if not captures and not storyboards:
         step = (f"déposez vos captures Archicad dans « captures », ou partez d'une image existante : "
@@ -498,7 +654,7 @@ def warn_references(project: Project, settings: Settings, master: bool) -> None:
 
 COMMANDS = {"nouveau": cmd_nouveau, "essais": cmd_essais, "maitre": cmd_maitre, "rendus": cmd_rendus,
             "storyboard": cmd_storyboard, "upscale": cmd_upscale, "video": cmd_video, "montage": cmd_montage,
-            "etat": cmd_etat}
+            "retouche": cmd_retouche, "film": cmd_film, "auto": cmd_auto, "etat": cmd_etat}
 
 
 def main(argv: list[str] | None = None) -> int:

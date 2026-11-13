@@ -7,7 +7,7 @@ Ce programme reproduit le workflow de deux vidéos TikTok du même créateur (co
 
 Toutes les consignes envoyées aux modèles sont en français, comme celles qu'on voit à l'écran dans la seconde vidéo, où le créateur les donne à Seedance 2.0. Google indique que Veo (Flow) comprend le français mais réussit mieux en anglais, et aucune source ne garantit le français pour Kling : si un modèle suit mal une consigne, faites-la traduire en anglais par Gemini, ou utilisez `--modele seedance` avec fal.ai.
 
-**Pour tout faire gratuitement** avec l'abonnement Google AI Pro, voir la section « Tout faire gratuitement ». **Pour le résultat le plus abouti**, toujours gratuitement, voir « Le plus abouti : Twinmotion, puis finition photo ».
+**Pour tout faire gratuitement** avec l'abonnement Google AI Pro, voir la section « Tout faire gratuitement ». **Pour le résultat le plus abouti**, toujours gratuitement, voir « Le plus abouti : Twinmotion, puis finition photo ». **Sans IA, sans compte et sans carte graphique**, voir « Sans IA : retouche et film sur le PC ». **Pour que tout s'enchaîne tout seul**, voir « Tout automatiser ».
 
 Deux fournisseurs au choix :
 
@@ -104,6 +104,8 @@ Avec l'abonnement Google AI Pro que vous avez déjà, sans rien payer de plus :
 | 3. Les vidéos | `python -m rendu_ia video PROJET <images>` : sans clé fal.ai, le programme n'envoie rien et écrit une **fiche à suivre dans Flow**, avec l'image et la consigne de chaque plan. L'abonnement donne 1 000 crédits Flow par mois ; un clip Veo 3.1 Lite en coûte 10, soit une centaine d'essais par mois. On refait ensuite les plans réussis avec un modèle Veo plus soigné, comme le créateur teste en 480p avant la version finale. |
 | 4. L'agrandissement | vidéos : agrandissement en 1080p dans Flow, gratuit avec l'abonnement ; images : un logiciel gratuit sur votre PC, par exemple Upscayl. |
 | 5. Le montage | `python -m rendu_ia montage PROJET` : les vidéos bout à bout avec un fondu, sur votre PC. Une image sans vidéo y devient un plan avec un lent zoom : sans aucun crédit Flow, les rendus suffisent pour une première vidéo. La musique s'ajoute ensuite dans Clipchamp ou CapCut. |
+
+**Sans aucun crédit ni compte**, `retouche` puis `film` font une vidéo complète sur le PC à partir des seules images : voir « Sans IA : retouche et film sur le PC ».
 
 Trois points à savoir avant de livrer à un client :
 
@@ -287,9 +289,87 @@ python -m rendu_ia rendus PROJET --finition
 
 Avec `--finition`, la consigne garde les matériaux, les couleurs et la lumière du rendu 3D et ne demande que l'aspect photo, au lieu d'appliquer la recette par défaut (chêne, murs grège, soleil de fin d'après-midi). L'image maître devient inutile : le rendu 3D tient déjà les vues ensemble. Sans clé, la commande écrit la fiche Gemini, comme pour des captures ; `essais` accepte la même option.
 
-5. **Vidéo** : rangez la vidéo de Twinmotion dans `PROJET\sorties\videos` ; `python -m rendu_ia montage PROJET` la place après les autres plans (pour un autre ordre, donnez les fichiers un à un). Pour animer une image en particulier, `video` et Flow restent disponibles.
+5. **Vidéo** : rangez la vidéo de Twinmotion dans `PROJET\sorties\videos` ; `python -m rendu_ia montage PROJET` la place après les autres plans (pour un autre ordre, donnez les fichiers un à un). Pour animer une image en particulier, `video` et Flow restent disponibles. Sans Gemini ni Flow, `retouche PROJET --finition` puis `film PROJET` font un film à partir des images de Twinmotion (section suivante).
 
 Sans carte graphique suffisante, restez sur les captures Archicad et Gemini : c'est le parcours décrit dans la suite.
+
+## Sans IA : retouche et film sur le PC
+
+Deux commandes gratuites, sans compte, sans clé, sans crédit et sans carte graphique : tout se calcule sur le PC, et rien n'est envoyé sur Internet.
+
+```
+python -m rendu_ia nouveau PROJET --depuis <dossier de vos images>
+python -m rendu_ia retouche PROJET
+python -m rendu_ia film PROJET
+```
+
+**`retouche`** donne à chaque vue ce qu'une photo a de plus qu'une capture, sans rien ajouter ni déplacer, et range le résultat dans `sorties\retouches` :
+
+- **lumière** : exposition et voile gris corrigés, lumière qui décroît en s'éloignant des fenêtres et des luminaires, angles légèrement plus sombres, halo autour des sources ;
+- **textures** : grandes taches des enduits effacées, détail fin renforcé, léger relief des surfaces unies ; une petite capture est d'abord agrandie deux fois, bords lissés ;
+- **appareil photo** : contraste doux, vignetage léger, grain fin.
+
+Avec `--finition`, les vues sont déjà des rendus 3D (Twinmotion, PhotoRendu d'Archicad) : leur lumière et leurs matériaux sont gardés tels quels, seuls le halo, le vignetage et le grain sont posés. Autres options : `--capture salon` (une seule vue, option répétable), `--refaire`.
+
+**`film`** filme la meilleure version de chaque vue (le rendu de `sorties\rendus` s'il existe, sinon la retouche, sinon la capture) et écrit `sorties\film.mp4`, en 1920 pixels de large, sans le son :
+
+- la caméra **avance, recule ou tourne** lentement ; un panoramique est une vraie rotation de caméra (les fuyantes bougent), pas un glissement de l'image ;
+- elle a le très léger **flottement** d'une caméra portée ;
+- la **lumière** des fenêtres et des lampes monte et descend doucement, comme quand un nuage passe ;
+- les plans s'enchaînent en **fondu**, sous un grain de film fin.
+
+Au premier lancement, la commande écrit le plan du film dans `PROJET\film.txt`, que vous pouvez modifier avec le Bloc-notes, puis relancer :
+
+```
+1_couloir : avant vers 45,42
+3_salon : gauche
+7_chambre : arriere
+```
+
+Une ligne par plan, dans l'ordre du film. Mouvements : `avant`, `arriere`, `gauche`, `droite`, `haut`, `bas`, `fixe`. « vers X,Y » donne le point visé, en % de l'image (0,0 en haut à gauche). Une vue sans ligne n'est pas filmée.
+
+Options : `--format 16/9` (par défaut `cinema`, le format large 2,39), `--duree-plan 7`, `--fondu 2`, `--sortie "C:\Livraison\visite.mp4"`, ou les images dans l'ordre voulu : `python -m rendu_ia film PROJET entree.jpg sejour.jpg`. Comptez une à trois minutes de calcul pour sept plans. La musique s'ajoute ensuite dans Clipchamp ou CapCut.
+
+**Ce que ce parcours ne fait pas.** Il améliore l'image, il ne recalcule pas la scène : les matériaux restent ceux d'Archicad, et une image fixe ne contient pas de relief, la caméra ne peut donc pas tourner autour des meubles. Pour de vrais matériaux et une vraie lumière, partez d'un rendu 3D :
+
+- **le PhotoRendu d'Archicad** (moteur Cineware, fourni avec Archicad, sans carte graphique) : menu *Documentation > Création d'images*, réglages de PhotoRendu avec une scène d'intérieur, puis enregistrez une image par vue. La lumière indirecte, les ombres douces et les reflets sont calculés pour de bon ; comptez plusieurs minutes par image. Les noms de menus varient selon la version ;
+- **Twinmotion** (section précédente), plus rapide et capable d'une vraie vidéo de visite, mais qui demande une carte graphique.
+
+Puis `nouveau PROJET --depuis <dossier des rendus>`, `retouche PROJET --finition` et `film PROJET`.
+
+## Tout automatiser
+
+**Une seule commande** fait tout le parcours, des vues au film, sans intervention :
+
+```
+python -m rendu_ia auto PROJET --depuis <dossier de vos images>
+```
+
+Elle crée le projet s'il n'existe pas, copie les vues, les retouche, écrit le plan du film et filme. Gratuit, sur le PC, sans compte. Relancée sans rien de nouveau, elle ne refait rien ; après un nouvel export, elle ne reprend que les vues qui ont changé, puis le film.
+
+Options : `--finition` (les vues sont déjà des rendus 3D : Twinmotion, PhotoRendu d'Archicad), `--format 16/9`, et `--ia` pour faire les rendus par l'IA au lieu de la retouche. `--ia` demande une clé, et ses demandes sont payées ou décomptées de l'offre gratuite : l'IA ne part jamais sans cette option.
+
+**Jusqu'à l'export d'Archicad.** Avec `--archicad`, le programme demande lui-même à Archicad d'exporter les vues, puis enchaîne :
+
+```
+python -m rendu_ia auto PROJET --archicad "Vues 3D"
+```
+
+À préparer une fois :
+
+1. installer dans Archicad l'extension gratuite **Tapir** (github.com/ENZYME-APD/tapir-archicad-automation, page des versions : le fichier de votre version d'Archicad, à charger par le gestionnaire d'extensions) ;
+2. dans le projet, créer un **jeu de publication** nommé par exemple « Vues 3D », qui contient vos vues 3D enregistrées, au format image (JPEG ou PNG).
+
+Ensuite, Archicad ouvert sur le projet, la commande fait publier le jeu dans `PROJET\export_archicad`, prend les images et continue jusqu'au film. Après une modification de la maquette, relancez la même commande.
+
+**Un assistant qui pilote les logiciels**, comme dans la troisième vidéo du même créateur. Il y demande à l'assistant d'OpenAI (GPT-6 Astra) de monter lui-même la 3D dans SketchUp à partir de plans et d'images de référence, puis de faire les images avec Nano Banana et les vidéos dans Magnific. L'assistant agit par des connexions aux logiciels et par le contrôle de l'ordinateur. Le créateur le dit lui-même : « pour l'instant, rien n'est 100 % stable ».
+
+L'équivalent avec Archicad et Claude, sur votre PC :
+
+- **piloter Archicad** : le serveur MCP `tapir-archicad-mcp` (projet libre, à brancher dans l'application Claude ou dans Claude Code, Archicad ouvert avec Tapir) donne à l'assistant les commandes d'Archicad. Suivez le README de ce projet pour l'installer ;
+- **enchaîner les rendus et le film** : demandez-le en français, par exemple « publie le jeu Vues 3D et fais le film du projet Cannes » ; l'assistant lance la commande `auto` ci-dessus.
+
+Faire modéliser tout un projet par un assistant reste fragile : d'après les premiers essais publiés, il produit facilement de la géométrie mais manque des règles simples de conception. Quand la maquette Archicad existe déjà, le gain sûr est ailleurs : l'export, les images et le film, que la commande `auto` enchaîne sans assistant.
 
 ## Utilisation, étape par étape
 
@@ -387,7 +467,11 @@ sorties\
   upscale\       images agrandies
   videos\        clips MP4
   montage.mp4    la vidéo finale
+  retouches\     vues retouchées sur le PC, sans IA
+  film.mp4       film fait sur le PC à partir des images
 ```
+
+Le plan du film (`film.txt`) est à la racine du projet, à côté de `ambiance.txt`.
 
 Sans clé, `essais`, `rendus` et `videos` contiennent aussi la fiche à suivre (`a_faire_dans_gemini.txt`, `a_faire_dans_flow.txt`).
 
@@ -429,7 +513,7 @@ Réglages avancés, si les modèles évoluent : `RENDU_ENDPOINT_VIDEO` (nouvelle
 
 ## État des vérifications
 
-Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Le parcours sans clé a été essayé sur cinq vraies captures Archicad : copie avec `nouveau --depuis`, fiche Gemini, et montage par le vrai ffmpeg (images avec zoom et fondus, vidéos de test) ; les tests lancent eux aussi ffmpeg. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. La consigne de finition (`--finition`) n'a pas non plus été essayée sur un vrai rendu Twinmotion. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
+Le programme est couvert par des tests automatiques, qui simulent les réponses de Gemini et de fal.ai. Les noms des modèles et le format des demandes viennent de leur documentation, consultée en octobre 2026. Côté Gemini, le vrai serveur de Google a été contacté avec une clé invalide : il répond bien, et le refus de la clé est reconnu. Le parcours sans clé a été essayé sur cinq vraies captures Archicad : copie avec `nouveau --depuis`, fiche Gemini, et montage par le vrai ffmpeg (images avec zoom et fondus, vidéos de test) ; les tests lancent eux aussi ffmpeg. Aucune image ni vidéo n'a encore été produite avec une vraie clé, et les consignes en français n'ont donc pas encore été essayées sur les vrais modèles. La consigne de finition (`--finition`) n'a pas non plus été essayée sur un vrai rendu Twinmotion. Les commandes `retouche` et `film` ont été lancées pour de bon sur sept vraies captures Archicad, et les résultats ont été contrôlés à l'œil ; elles n'ont pas été essayées sur un rendu Twinmotion ni sur un PhotoRendu d'Archicad, ni sous Windows. La commande `auto` a été lancée de bout en bout sur ces mêmes captures ; son export depuis Archicad (`--archicad`) suit la documentation de Tapir et n'a été essayé que contre un Archicad simulé par les tests, jamais contre un vrai Archicad. L'offre gratuite de Nano Banana 2 Lite est annoncée par le guide officiel de Google mais pas par sa page des tarifs : seul un essai avec une clé gratuite le tranchera. Pour le premier essai, limitez la dépense : `essais PROJET --capture salon --nombre 1 --apply`.
 
 Pour lancer les tests :
 

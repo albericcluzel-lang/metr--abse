@@ -395,3 +395,39 @@ def default_montage_clips(project: Project) -> list[Path]:
                      and path.relative_to(folder).parts[0] != "essais" and path not in ordered),
                     key=lambda path: path.relative_to(folder).as_posix().lower())
     return ordered + others
+
+
+# --- Retouche et film, sur le PC ------------------------------------------------------------------
+
+def retouch_target(project: Project, capture: Path) -> Path:
+    return project.output / "retouches" / f"{capture.stem}.jpg"
+
+
+def retouch_done(project: Project, capture: Path) -> bool:
+    target = retouch_target(project, capture)
+    return target.is_file() and target.stat().st_mtime >= capture.stat().st_mtime
+
+
+def film_sources(project: Project) -> list[tuple[Path, str]]:
+    """La meilleure version de chaque vue, dans l'ordre des captures, et sa nature : le rendu (Gemini)
+    s'il existe, sinon la retouche, sinon la capture elle-même."""
+    sources = []
+    for capture in project.captures():
+        render = find_output(project.output / "rendus" / capture.stem, IMAGE_SUFFIXES)
+        retouched = retouch_target(project, capture)
+        if render:
+            sources.append((render, "rendu"))
+        elif retouched.is_file():
+            sources.append((retouched, "retouche"))
+        else:
+            sources.append((capture, "capture"))
+    return sources
+
+
+def film_done(project: Project) -> bool:
+    """Le film existe-t-il, et est-il plus récent que toutes ses images et que son plan (film.txt) ?"""
+    target = project.output / "film.mp4"
+    sources = [path for path, _ in film_sources(project)]
+    plan = project.root / "film.txt"
+    return bool(sources) and target.is_file() and target.stat().st_mtime >= max(
+        path.stat().st_mtime for path in sources + ([plan] if plan.is_file() else []))
